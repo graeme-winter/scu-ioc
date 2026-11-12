@@ -289,14 +289,16 @@ class SimSCU:
             a.move_to(target, hold)
             return self._ok()
         if cmd in ("U", "D"):
-            a = self._axis(ch)
-            f = num("F", a.frequency, int)
-            amp = num("A", a.amplitude, int)
-            s = num("S", a.steps, int)
-            if not (1 <= f <= 18500 and 150 <= amp <= 1000 and 1 <= s <= P.MAX_STEPS):
-                raise _Err(17)
-            a.steps = s
-            a.step(s if cmd == "U" else -s, amp, f)
+            targets = self.axes if ch == 99 else [self._axis(ch)]
+            for a in targets:
+                a.update()
+                f = num("F", a.frequency, int)
+                amp = num("A", a.amplitude, int)
+                s = num("S", a.steps, int)
+                if not (1 <= f <= 18500 and 150 <= amp <= 1000 and 1 <= s <= P.MAX_STEPS):
+                    raise _Err(17)
+                a.steps = s
+                a.step(s if cmd == "U" else -s, amp, f)
             return self._ok()
         if cmd == "CS":
             self._axis(ch, True).calibrate()
