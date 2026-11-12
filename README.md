@@ -1,0 +1,196 @@
+# scu-ioc
+
+EPICS soft IOC for SmarAct SCU piezo controllers (CU-1D/3D and HCU-1D/3D,
+with or without sensor module), written against SmarAct's *SCU ASCII
+Programming Interface* v2.0-C and *SCU Programmer's Guide* v2.0-C
+(SCU3DControl.dll 1.4.6). Pure Python:
+[pythonSoftIOC](https://github.com/DiamondLightSource/pythonSoftIOC), plus
+pyserial. No EPICS build, no motor module.
+
+There are two ways to talk to an SCU, selected with `--backend`:
+
+| Backend | Hardware | Host |
+| --- | --- | --- |
+| `dll` (default) | USB SCUs with the stock firmware (e.g. CU-3D-USB-OEM as shipped) | Windows only: SCU3DControl.dll uses FTDI's D2XX driver |
+| `ascii` | RS-232 SCUs, or USB SCUs reflashed with SmarAct's ASCII firmware (they then appear as an FTDI virtual COM port) | anything with pyserial, including `socket://` device servers |
+
+The stock USB firmware does not answer ASCII commands. The SCU user manual
+says an ASCII firmware is available for the USB versions on request from
+SmarAct, and the SCU software package includes the Firmware Uploader. That
+is the route to running this on Linux or in a container.
+
+Layout:
+
+| Module | Role |
+| --- | --- |
+| `protocol.py` | Status codes, sensor types, error texts; ASCII framing and parsing |
+| `backend.py` | Backend interface (blocking, um / mdeg / 1/10 V / Hz units) |
+| `ascii.py` | ASCII serial backend |
+| `dll.py` | SCU3DControl.dll backend (ctypes) |
+| `sim.py` | ASCII-protocol simulator; `scu-sim` serves it on a pty |
+| `ioc.py` | pythonSoftIOC records and worker thread; `scu-ioc` entry point |
+| `cli.py` | `scu` bench tool over either backend |
+
+## Install and run
+
+```sh
+python -m venv .venv && . .venv/bin/activate     # Windows: .venv\Scripts\activate
+pip install .                                     # or: pip install -e '.[dev]' && pytest
+```
+
+### Windows, stock USB firmware
+
+Install the SmarAct SCU software (it installs the FTDI USB driver and
+FTD2XX.dll), close the SCU Configuration Tool, then:
+
+```bat
+set SCU_DLL=C:\path\to\SCU\SDK\lib64\SCU3DControl.dll
+scu-ioc --prefix 24IDC:SCU: --device-id 604573714
+```
+
+Use `SDK\lib64` with 64-bit Python and `SDK\lib` with 32-bit. `--dll`
+does the same as `SCU_DLL`. `--device-id` is optional with one controller
+attached; `scu list` shows what is connected. Allow Python through the
+Windows firewall for Channel Access (UDP/TCP 5064, UDP 5065).
+
+### Serial (RS-232 or ASCII firmware)
+
+```sh
+scu-ioc --backend ascii --port /dev/serial/by-id/usb-FTDI_...-if00-port0 --prefix 24IDC:SCU:
+scu-ioc --backend ascii --port socket://moxa1:4001 --prefix 24IDC:SCU:
+```
+
+The factory baud rate is 9600 (`--baud` to change). The IOC user needs to
+be in `dialout` for local serial ports.
+
+### Without hardware
+
+```sh
+scu-sim --link /tmp/scu &                  # --sensors 21,19,0 for linear, rotary, no sensor
+scu-ioc --backend ascii --port /tmp/scu --prefix TEST:SCU:
+```
+
+Other options: `--axes X,Y,-` names channels A, B, C in PVs (`-` skips a
+channel); `--poll` sets the idle poll period (default 1 s) and
+`--busy-poll` the period while anything moves or holds (default 0.1 s);
+`--no-shell` disables the interactive Python shell (use under procServ);
+`-v` logs all controller traffic.
+
+## PVs
+
+The prefix is used verbatim. Device-level PVs are `$(PREFIX)NAME`;
+per-axis PVs are `$(PREFIX)$(AXIS):NAME`, with AXIS defaulting to A, B, C.
+
+### Device
+
+| PV | Type | Notes |
+| --- | --- | --- |
+| `CONNECTED` | bi | Disconnected / Connected |
+| `MODEL`, `DEVICE_ID`, `FIRMWARE` | stringin | from the controller |
+| `BACKEND`, `VERSION` | stringin | `dll` or `ascii`; IOC version |
+| `TEMPERATURE` | ai | °C, every 5 s |
+| `HV` | ai | internal 100 V supply, V |
+| `STOP_ALL` | bo | write 1 |
+| `LAST_ERROR` | lsi | connection errors |
+
+### Per axis
+
+Names follow the motor record where there is an equivalent, so screens
+and habits carry over, but these are separate records rather than a motor
+record. Positions are µm for linear sensor types and millidegrees for rotary
+ones; EGU switches when the sensor type is read.
+
+| PV | Type | Notes |
+| --- | --- | --- |
+| `VAL` | ao | closed-loop absolute move; put-callback completes with `DMOV` already 0 |
+| `RBV` | ai | position; INVALID without a sensor or connection |
+| `RLV` | ao | relative move: `VAL += RLV` |
+| `TWV`, `TWF`, `TWR` | ao, bo, bo | tweak by `TWV` |
+| `DMOV`, `MOVN` | bi | done (stopped or holding) / moving |
+| `STATUS` | mbbi | Stopped, Setting amplitude, Moving, Targeting, Holding, Calibrating, Referencing |
+| `STOP` | bo | stops the axis and discards queued commands for it |
+| `HLM`, `LLM` | ao | IOC-side soft limits for `VAL`/`RLV`/tweak; disabled when `HLM <= LLM` (default 0, 0) |
+| `HOLD` | longout | ms to actively hold after closed-loop moves and referencing; 60000 = until stopped |
+| `STEP` | longout | open-loop steps, signed, \|n\| < 30000 |
+| `STEP_AMP`, `STEP_FREQ` | ao, longout | 15–100 V, 1–18500 Hz |
+| `CALIBRATE` | bo | sensor calibration: moves several mm both ways; keep clear of end stops |
+| `REFERENCE`, `AUTO_ZERO` | bo, bo | move to reference (in `SAFE_DIR`); auto-zero sets 0 there |
+| `REFERENCED` | bi | physical position known |
+| `SET_ZERO` | bo | current position becomes 0 (stored if referenced) |
+| `SENSOR_PRESENT` | bi | |
+| `SENSOR_TYPE`, `SENSOR_TYPE_RBV`, `SENSOR_NAME` | longout, longin, stringin | type code, stored in the controller's NV memory; see the table in `protocol.py` |
+| `CL_MAX_FREQ`, `CL_MAX_FREQ_RBV` | longout, longin | closed-loop max step frequency, Hz (sets speed) |
+| `SAFE_DIR`, `SAFE_DIR_RBV` | bo, bi | direction for calibrate/reference, stored in NV memory |
+| `LAST_ERROR` | lsi | last rejected command, e.g. "No sensor present (E19)" |
+
+A rejected `VAL` (controller error, limit, not connected) snaps back to the
+current position and sets `LAST_ERROR`. `VAL` follows `RBV` after open-loop
+moves, stops, calibration and referencing.
+
+### ophyd
+
+```python
+from ophyd import Component as Cpt, EpicsSignal, EpicsSignalRO, PVPositioner
+
+class SCUAxis(PVPositioner):
+    setpoint = Cpt(EpicsSignal, ":VAL")
+    readback = Cpt(EpicsSignalRO, ":RBV")
+    done = Cpt(EpicsSignalRO, ":DMOV")
+    stop_signal = Cpt(EpicsSignal, ":STOP")
+    done_value = 1
+    stop_value = 1
+
+x = SCUAxis("24IDC:SCU:A", name="x")
+```
+
+## Commissioning an axis
+
+1. **Sensor type.** Check `SENSOR_NAME` against the positioner's label or
+   datasheet. SLC positioners with the "l" (improved micro) sensor come in
+   three variants: single reference mark is L (21), distance-coded marks are
+   LC (18), and end-stop referenced is LE (23). Wrong types are the usual
+   cause of referencing failures.
+2. **Calibrate** once per positioner/channel pairing, away from the end
+   stops. The result is stored in the controller.
+3. **Safe direction.** Set `SAFE_DIR` towards free travel.
+4. **Reference** after each power-up (`REFERENCED` goes to Yes). Use
+   `AUTO_ZERO` if you want 0 at the reference mark.
+5. **Soft limits.** Set `HLM` and `LLM` for the mechanics around the stage.
+   They live in the IOC only; use autosave or the startup script to restore
+   them.
+6. **Speed.** `CL_MAX_FREQ` sets the closed-loop speed (default 5000 Hz).
+
+## Tests
+
+```sh
+pip install -e '.[dev]'
+pytest
+```
+
+The protocol, simulator, ASCII backend (over a pty) and CLI tests take
+about a second. `tests/test_ioc.py` runs `scu-sim` plus `scu-ioc` as
+subprocesses and drives them with caproto (about 15 s; skipped without
+caproto). The DLL backend is tested against a fake DLL object.
+
+## Known gaps
+
+- **DLL backend has only been tested against a fake DLL**, not the real
+  SCU3DControl.dll or hardware. Argument order and units follow the header
+  and Programmer's Guide; the ctypes binding assumes cdecl (the header
+  declares no calling convention, which is moot on x64).
+- **ASCII backend has only been tested against the simulator.** In
+  particular, the manual's MPA/MPR examples are integer µm. Whether the
+  firmware accepts one decimal place (which the IOC sends for sub-µm
+  targets) is unverified. If it doesn't, `LAST_ERROR` will show a parse,
+  syntax or parameter error.
+- **pythonSoftIOC on Windows** is expected to install from wheels, but this
+  IOC has not been run there yet.
+- **Not exposed:** move to end stop (MES), scale offset and inversion (SSC),
+  vertical alignment (SPA), the target-reached threshold and gain channel
+  properties (SCP), and the keep-alive timer (K).
+- **No motor record**: `EpicsMotor` won't work; use `PVPositioner` as above.
+- **Soft limits** are not applied to open-loop `STEP`.
+- **Holding:** `DMOV` goes to 1 when a held target is reached. With
+  `HOLD` = 60000 the axis holds, and is fast-polled, until `STOP`.
+- **Simulator** motion is a crude constant-speed model; scale inversion is
+  not modelled.
