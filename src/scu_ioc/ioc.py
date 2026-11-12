@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import collections
 import logging
+import sys
 import threading
 import time
 
@@ -54,7 +55,7 @@ class WorkQueue:
     def purge(self, owner):
         """Drop queued items belonging to owner (used by STOP)."""
         with self._cv:
-            self._q = collections.deque(i for i in self._q if i[0] is not owner)
+            self._q = collections.deque(i for i in self._q if i is None or i[0] is not owner)
 
     def clear(self):
         with self._cv:
@@ -351,6 +352,8 @@ class Controller:
         self.info: DeviceInfo | None = None
         self._fast = False
         self._last_system = 0.0
+        self._shutdown = threading.Event()
+        self._thread: threading.Thread | None = None
 
         self.CONNECTED = builder.boolIn("CONNECTED", ZNAM="Disconnected", ONAM="Connected",
                                         initial_value=0)
@@ -379,7 +382,27 @@ class Controller:
 
     # -- worker ------------------------------------------------------------------
     def start(self):
-        threading.Thread(target=self._run, daemon=True, name="scu-worker").start()
+        self._thread = threading.Thread(target=self._run_guarded, daemon=True,
+                                        name="scu-worker")
+        self._thread.start()
+
+    def shutdown(self, timeout: float = 5.0):
+        """Stop the worker and release the controller. Motion is left alone,
+        as with a motor record IOC."""
+        if self._thread is None or self._shutdown.is_set():
+            return
+        self._shutdown.set()
+        self.queue.put(None)          # wake the worker
+        self._thread.join(timeout)
+        if self._thread.is_alive():
+            log.warning("worker did not stop within %.0f s", timeout)
+
+    def _run_guarded(self):
+        try:
+            self._run()
+        finally:
+            self.backend.close()
+            log.info("released controller")
 
     def _connect(self):
         info = self.backend.connect()
@@ -443,9 +466,12 @@ class Controller:
     def _run(self):
         backoff = 1.0
         next_full = 0.0
-        while True:
+        while not self._shutdown.is_set():
             if not self.connected:
-                for axis, _ in self.queue.clear():
+                for item in self.queue.clear():
+                    if item is None:
+                        continue
+                    axis = item[0]
                     axis.pending_until = 0.0
                     axis.error("not connected")
                 try:
@@ -455,7 +481,7 @@ class Controller:
                 except (ConnectionLost, P.ProtocolError, P.CommandError) as e:
                     self._disconnect(str(e))
                     log.info("connect failed (%s); retrying in %.0f s", e, backoff)
-                    time.sleep(backoff)
+                    self._shutdown.wait(backoff)
                     backoff = min(backoff * 2, 30.0)
                 continue
             try:
@@ -470,7 +496,7 @@ class Controller:
                 period = self.busy_poll if (fast or any(a.active for a in self.axes)) \
                     else max(0.0, next_full - _now())
                 item = self.queue.get(timeout=period)
-                while item is not None:
+                while item is not None and not self._shutdown.is_set():
                     self._run_item(item)
                     item = self.queue.get(timeout=0)
             except (ConnectionLost, P.ProtocolError) as e:
@@ -535,10 +561,29 @@ def main(argv=None):
     softioc.iocInit(dispatcher)
     ctl.start()
 
-    if a.no_shell:
-        threading.Event().wait()
-    else:
-        softioc.interactive_ioc(globals() | {"ctl": ctl})
+    code = 0
+    try:
+        if a.no_shell:
+            threading.Event().wait()
+        else:
+            # call_exit=False: softioc passes SystemExit.code straight to
+            # epicsExit(), which fails for quit()/exit() (code None).
+            softioc.interactive_ioc(globals() | {"ctl": ctl}, call_exit=False)
+    except KeyboardInterrupt:
+        pass
+    except SystemExit as e:
+        code = _exit_code(e.code)
+    ctl.shutdown()
+    softioc.safeEpicsExit(code)
+
+
+def _exit_code(code) -> int:
+    if code is None:
+        return 0
+    if isinstance(code, int):
+        return code
+    print(code, file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":
