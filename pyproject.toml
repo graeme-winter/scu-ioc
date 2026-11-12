@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scu-ioc"
+version = "0.1.0"
+description = "EPICS soft IOC for SmarAct SCU (CU/HCU-1D/3D) piezo controllers"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "Graeme Winter", email = "graeme.winter@gmail.com" }]
+dependencies = ["softioc>=4.5", "pyserial>=3.5"]
+
+[project.optional-dependencies]
+dev = ["pytest", "caproto"]
+
+[project.scripts]
+scu-ioc = "scu_ioc.ioc:main"
+scu-sim = "scu_ioc.sim:main"
+scu = "scu_ioc.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
