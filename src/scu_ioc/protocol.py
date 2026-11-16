@@ -69,6 +69,24 @@ SENSOR_TYPES = {
     22: ("LD", "linear", "L with large actuator"),
     23: ("LE", "linear", "SLCxxxxl end stop ref"),
     24: ("LED", "linear", "LE with large actuator"),
+    # Positioner type codes from SDK 1.5.16 (SCU3DControlConstants.h).
+    25: ("SL_S1I1E1", "linear", "linear, inductive sensor, 293 nm"),
+    26: ("SL_D1I1E1", "linear", "SL_S1I1E1 with large actuator"),
+    27: ("SL_S1I2E2", "linear", "linear, inductive sensor, 73 nm"),
+    28: ("SL_D1I2E2", "linear", "SL_S1I2E2 with large actuator"),
+    29: ("ST_S1I1E2", "rotary", "25.4 mm mirror tip-tilt axis"),
+    30: ("SG_D1L1S", "rotary", "goniometer 60.5 mm, single ref"),
+    31: ("SG_D1L1E", "rotary", "goniometer 60.5 mm, end stop ref"),
+    32: ("SG_D1L2S", "rotary", "goniometer 77.5 mm, single ref"),
+    33: ("SG_D1L2E", "rotary", "goniometer 77.5 mm, end stop ref"),
+    34: ("SG_D1M1E", "rotary", "goniometer 60.5 mm, M sensor"),
+    35: ("SG_D1M2E", "rotary", "goniometer 77.5 mm, M sensor"),
+    36: ("SI_S1L1S", "rotary", "iris diaphragm 21.42 mm, single ref"),
+    37: ("ST_S1I2E2", "rotary", "50.8 mm mirror tip-tilt axis"),
+    38: ("SR_T5L3S", "rotary", "rotary, L sensor, single ref"),
+    39: ("SI_S1L4E", "rotary", "iris diaphragm 50.42 mm, end stop ref"),
+    40: ("SI_S1L1E", "rotary", "iris diaphragm 21.42 mm, end stop ref"),
+    41: ("SI_S1L3E", "rotary", "iris diaphragm 16.42 mm, end stop ref"),
 }
 
 

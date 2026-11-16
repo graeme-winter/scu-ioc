@@ -1,8 +1,11 @@
-"""SCU3DControl.dll backend (Windows, stock USB firmware).
+"""SmarAct SCU SDK backend (stock USB firmware).
 
-The DLL talks to the controller through FTDI's D2XX driver (FTD2XX.dll,
-installed with the SmarAct/FTDI USB driver). Only synchronous (_S) calls
-are used. The DLL is process-global: one backend instance per process.
+Wraps SCU3DControl.dll on Windows or libscu3dcontrol.so on Linux (x86 and
+x86-64 only); both export the same C API. The library talks to the
+controller through FTDI's D2XX driver: FTD2XX.dll (installed with the
+SmarAct/FTDI USB driver) or libftd2xx.so (shipped in the Linux SDK's
+Redistributables). Only synchronous (_S) calls are used. The library is
+process-global: one backend instance per process.
 
 DLL units are 1/10 um and 1/10 mdeg; this module converts to um / mdeg.
 """
@@ -10,8 +13,10 @@ DLL units are 1/10 um and 1/10 mdeg; this module converts to um / mdeg.
 from __future__ import annotations
 
 import ctypes
+import glob
 import logging
 import os
+import sys
 from ctypes import POINTER, byref, c_int, c_uint
 from pathlib import Path
 
@@ -106,22 +111,55 @@ _SIGNATURES = {
     "SA_GetPosition_S": [U, U, pI],
     "SA_GetAngle_S": [U, U, pI, pI],
     "SA_GetPhysicalPositionKnown_S": [U, U, pU],
+    "SA_GetChannelProperty_S": [U, U, I, pI],
 }
+
+SA_MOVEMENT_TYPE_PROP = 25          # SDK >= 1.5; 0 linear, 1 rotary, 2 goniometer
+SA_COMMAND_NOT_SUPPORTED = 129
 
 
 def default_dll_path() -> str:
+    """$SCU_DLL, else the platform's library name on the normal search path."""
     if os.environ.get("SCU_DLL"):
         return os.environ["SCU_DLL"]
-    return "SCU3DControl.dll"
+    return "SCU3DControl.dll" if sys.platform == "win32" else "libscu3dcontrol.so"
+
+
+def _preload_ftd2xx(libdir: Path) -> None:
+    """libscu3dcontrol.so needs libftd2xx.so but has no RPATH; if the FTDI
+    library sits next to it (as in the SDK's Redistributables), load it
+    RTLD_GLOBAL first so LD_LIBRARY_PATH isn't needed."""
+    for cand in sorted(glob.glob(str(libdir / "libftd2xx.so*")), key=len):
+        try:
+            ctypes.CDLL(cand, mode=ctypes.RTLD_GLOBAL)
+            log.debug("preloaded %s", cand)
+            return
+        except OSError as e:
+            log.debug("could not preload %s: %s", cand, e)
+
+
+def _unsupported(*_args):
+    return SA_COMMAND_NOT_SUPPORTED
 
 
 def load_dll(path: str | None = None):
     path = path or default_dll_path()
-    if os.path.dirname(path) and hasattr(os, "add_dll_directory"):
-        os.add_dll_directory(str(Path(path).resolve().parent))
+    libdir = Path(path).resolve().parent if os.path.dirname(path) else None
+    if libdir is not None:
+        if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
+            os.add_dll_directory(str(libdir))
+        elif sys.platform != "win32":
+            _preload_ftd2xx(libdir)
     dll = ctypes.CDLL(path)   # no calling convention in the header -> cdecl
+    # Bind leniently: a function missing from an older or newer library
+    # reports SA_COMMAND_NOT_SUPPORTED instead of failing the whole load.
     for name, argtypes in _SIGNATURES.items():
-        fn = getattr(dll, name)
+        try:
+            fn = getattr(dll, name)
+        except AttributeError:
+            log.warning("%s not exported by %s; treated as unsupported", name, path)
+            setattr(dll, name, _unsupported)
+            continue
         fn.argtypes = argtypes
         fn.restype = c_uint
     return dll
@@ -136,7 +174,7 @@ def _to_tenths(x: float) -> int:
 
 
 class DllBackend(Backend):
-    name = "dll"
+    name = "sdk"
 
     def __init__(self, device_id: int | None = None, dll_path: str | None = None, dll=None):
         self.device_id = device_id
@@ -202,7 +240,17 @@ class DllBackend(Backend):
             sd = self._get("SA_GetSafeDirection_S", d, ch)
         except P.CommandError:
             sd = None
-        return AxisConfig(present, stype, clf, sd)
+        return AxisConfig(present, stype, clf, sd, self._movement_type(ch))
+
+    def _movement_type(self, ch) -> str | None:
+        """'linear'/'rotary' from the controller where it can say (newer
+        SDK and firmware); None to fall back to the sensor-type table."""
+        try:
+            mt = self._get("SA_GetChannelProperty_S", self.index, ch,
+                           SA_MOVEMENT_TYPE_PROP, ctype=c_int)
+        except P.CommandError:
+            return None
+        return {0: "linear", 1: "rotary", 2: "rotary"}.get(mt)
 
     def status(self, ch):
         return self._get("SA_GetStatus_S", self.index, ch)
@@ -276,6 +324,11 @@ def available_devices(dll_path: str | None = None, dll=None) -> list[int]:
     code = dll.SA_GetAvailableDevices(ids, byref(n))
     if code == 3:
         return []
+    if code == 1:
+        raise ConnectionLost(
+            "SA_GetAvailableDevices: initialization error. On Linux this usually "
+            "means no accessible FTDI device: check the SCU is plugged in, that "
+            "ftdi_sio is not bound to it, and USB permissions (see README)")
     if code != SA_OK:
         raise DllCommandError("SA_GetAvailableDevices", code)
     return [ids[i] for i in range(n.value)]

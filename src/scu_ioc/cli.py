@@ -1,10 +1,11 @@
 """`scu`: small command-line tool for bench work, over either backend.
 
-    scu --backend dll status
+    scu status
+    scu --lib /opt/smaract/lib/libscu3dcontrol.so status
     scu --backend ascii --port /dev/ttyUSB0 rel A 25
     scu ... step B -500 --amp 60 --freq 1000
     scu ... reference A --auto-zero
-    scu --backend dll list
+    scu list
     scu --backend ascii --port /dev/ttyUSB0 raw GP0
 
 Close the IOC (or the SmarAct tools) first: only one client can own the
@@ -60,17 +61,19 @@ def describe(b: Backend, ch: int) -> str:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="SmarAct SCU bench tool")
-    ap.add_argument("--backend", choices=["dll", "ascii"], default="dll")
+    ap.add_argument("--backend", choices=["sdk", "dll", "ascii"], default="sdk",
+                    help="sdk (alias dll): SmarAct SCU library; ascii: serial")
     ap.add_argument("--port", help="ascii: serial device or pyserial URL")
     ap.add_argument("--baud", type=int, default=9600)
     ap.add_argument("--device-id", type=int)
-    ap.add_argument("--dll")
+    ap.add_argument("--lib", "--dll", dest="dll",
+                    help="sdk: path to SCU3DControl.dll / libscu3dcontrol.so")
     ap.add_argument("--timeout", type=float, default=60.0, help="motion timeout, s")
     ap.add_argument("--no-wait", action="store_true")
     ap.add_argument("-v", "--verbose", action="store_true")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("list", help="dll: list connected SCU device IDs")
+    sub.add_parser("list", help="sdk: list connected SCU device IDs")
     sub.add_parser("status")
     for name, helptext in (("move", "closed-loop absolute (um / mdeg)"),
                            ("rel", "closed-loop relative (um / mdeg)")):
@@ -101,7 +104,7 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.WARNING)
 
-    if a.backend == "dll":
+    if a.backend in ("sdk", "dll"):
         from .dll import DllBackend, available_devices
         if a.cmd == "list":
             ids = available_devices(a.dll)
@@ -113,7 +116,7 @@ def main(argv=None) -> int:
         if not a.port:
             ap.error("--port is required for the ascii backend")
         if a.cmd == "list":
-            ap.error("list is only available with the dll backend")
+            ap.error("list is only available with the sdk backend")
         b = AsciiBackend(a.port, a.baud)
 
     try:

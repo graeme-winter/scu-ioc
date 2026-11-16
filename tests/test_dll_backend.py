@@ -1,5 +1,8 @@
 """DllBackend against a fake DLL object (the real one is Windows-only)."""
 
+import ctypes
+import sys
+
 import pytest
 
 from scu_ioc import protocol as P
@@ -66,6 +69,13 @@ class FakeDll:
     def _SA_MovePositionAbsolute_S(self, d, ch, p, h):
         self.pos[ch] = p; return 0
 
+    movement = None      # None: property unsupported (older firmware/SDK)
+
+    def _SA_GetChannelProperty_S(self, d, ch, key, v):
+        if key != 25 or self.movement is None:
+            return 129
+        self._out(v, self.movement[ch]); return 0
+
     def _SA_GetSystemProperty_S(self, d, key, v):
         self._out(v, {1: 33, 2: 998}[key]); return 0
 
@@ -129,3 +139,37 @@ def test_available_devices(fake):
     assert available_devices(dll=fake) == [604573714]
     fake.fail["SA_GetAvailableDevices"] = 3
     assert available_devices(dll=fake) == []
+
+
+def test_movement_type_property_overrides_table(fake):
+    fake.movement = [1, 0, 0]          # controller says ch0 rotary, ch1 linear
+    b = DllBackend(dll=fake)
+    b.connect()
+    assert b.axis_config(0).rotary     # sensor type 21 (L) would say linear
+    assert not b.axis_config(1).rotary # sensor type 19 (LR) would say rotary
+
+
+def test_new_positioner_type_codes():
+    assert P.sensor_kind(25) == "linear"
+    assert P.sensor_kind(38) == "rotary"
+    assert P.sensor_symbol(25) == "SL_S1I1E1"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="uses libc as a stand-in")
+def test_lenient_binding_of_missing_symbols():
+    import ctypes.util
+    from scu_ioc.dll import load_dll
+    lib = load_dll(ctypes.util.find_library("c") or "libc.so.6")
+    v = ctypes.c_uint()
+    assert lib.SA_GetDLLVersion(ctypes.byref(v)) == 129   # not supported
+
+
+def test_default_library_name(monkeypatch):
+    from scu_ioc import dll
+    monkeypatch.delenv("SCU_DLL", raising=False)
+    monkeypatch.setattr(dll.sys, "platform", "linux")
+    assert dll.default_dll_path() == "libscu3dcontrol.so"
+    monkeypatch.setattr(dll.sys, "platform", "win32")
+    assert dll.default_dll_path() == "SCU3DControl.dll"
+    monkeypatch.setenv("SCU_DLL", "/x/y.so")
+    assert dll.default_dll_path() == "/x/y.so"

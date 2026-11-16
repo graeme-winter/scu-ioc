@@ -528,13 +528,16 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="EPICS soft IOC for SmarAct SCU controllers")
     ap.add_argument("--prefix", required=True,
                     help="PV prefix, used verbatim (include any trailing ':')")
-    ap.add_argument("--backend", choices=["dll", "ascii"], default="dll",
-                    help="dll: stock USB firmware via SCU3DControl.dll (Windows); "
+    ap.add_argument("--backend", choices=["sdk", "dll", "ascii"], default="sdk",
+                    help="sdk (alias dll): stock USB firmware via SmarAct's SCU library, "
+                         "SCU3DControl.dll or libscu3dcontrol.so; "
                          "ascii: RS-232 or ASCII-firmware USB via serial port")
     ap.add_argument("--port", help="ascii: serial device or pyserial URL (socket://host:port)")
     ap.add_argument("--baud", type=int, default=9600, help="ascii: baud rate (default 9600)")
-    ap.add_argument("--device-id", type=int, help="dll: SCU device ID (default: first found)")
-    ap.add_argument("--dll", help="dll: path to SCU3DControl.dll (default: $SCU_DLL or DLL search path)")
+    ap.add_argument("--device-id", type=int, help="sdk: SCU device ID (default: first found)")
+    ap.add_argument("--lib", "--dll", dest="dll",
+                    help="sdk: path to SCU3DControl.dll / libscu3dcontrol.so "
+                         "(default: $SCU_DLL, else the library search path)")
     ap.add_argument("--axes", default="A,B,C",
                     help="PV names for channels 0,1,2 ('-' skips a channel; default A,B,C)")
     ap.add_argument("--poll", type=float, default=1.0, help="idle poll period, s (default 1)")

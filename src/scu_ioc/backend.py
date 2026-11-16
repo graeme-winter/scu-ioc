@@ -33,10 +33,12 @@ class AxisConfig:
     sensor_type: int
     cl_max_frequency: int | None   # None where not readable
     safe_direction: int | None     # 0 backward, 1 forward; None if n/a
+    movement: str | None = None    # "linear"/"rotary" if the controller says
 
     @property
     def rotary(self) -> bool:
-        return P.sensor_kind(self.sensor_type) == "rotary"
+        kind = self.movement or P.sensor_kind(self.sensor_type)
+        return kind == "rotary"
 
 
 class Backend:

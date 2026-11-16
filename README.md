@@ -3,7 +3,7 @@
 EPICS soft IOC for SmarAct SCU piezo controllers (CU-1D/3D and HCU-1D/3D,
 with or without sensor module), written against SmarAct's *SCU ASCII
 Programming Interface* v2.0-C and *SCU Programmer's Guide* v2.0-C
-(SCU3DControl.dll 1.4.6). Pure Python:
+(SCU3DControl 1.4.x on Windows, libscu3dcontrol 1.5.16 on Linux). Pure Python:
 [pythonSoftIOC](https://github.com/DiamondLightSource/pythonSoftIOC), plus
 pyserial. No EPICS build, no motor module.
 
@@ -11,7 +11,7 @@ There are two ways to talk to an SCU, selected with `--backend`:
 
 | Backend | Hardware | Host |
 | --- | --- | --- |
-| `dll` (default) | USB SCUs with the stock firmware (e.g. CU-3D-USB-OEM as shipped) | Windows only: SCU3DControl.dll uses FTDI's D2XX driver |
+| `sdk` (default; `dll` is an alias) | USB SCUs with the stock firmware (e.g. CU-3D-USB-OEM as shipped) | Windows (SCU3DControl.dll) or Linux x86/x86-64 (libscu3dcontrol.so); both use FTDI's D2XX driver |
 | `ascii` | RS-232 SCUs, or USB SCUs reflashed with SmarAct's ASCII firmware (they then appear as an FTDI virtual COM port) | anything with pyserial, including `socket://` device servers |
 
 The stock USB firmware does not answer ASCII commands. The SCU user manual
@@ -26,7 +26,7 @@ Layout:
 | `protocol.py` | Status codes, sensor types, error texts; ASCII framing and parsing |
 | `backend.py` | Backend interface (blocking, um / mdeg / 1/10 V / Hz units) |
 | `ascii.py` | ASCII serial backend |
-| `dll.py` | SCU3DControl.dll backend (ctypes) |
+| `dll.py` | SDK backend: ctypes binding of SCU3DControl.dll / libscu3dcontrol.so |
 | `sim.py` | ASCII-protocol simulator; `scu-sim` serves it on a pty |
 | `ioc.py` | pythonSoftIOC records and worker thread; `scu-ioc` entry point |
 | `cli.py` | `scu` bench tool over either backend |
@@ -48,10 +48,55 @@ set SCU_DLL=C:\path\to\SCU\SDK\lib64\SCU3DControl.dll
 scu-ioc --prefix 24IDC:SCU: --device-id 604573714
 ```
 
-Use `SDK\lib64` with 64-bit Python and `SDK\lib` with 32-bit. `--dll`
-does the same as `SCU_DLL`. `--device-id` is optional with one controller
+Use `SDK\lib64` with 64-bit Python and `SDK\lib` with 32-bit. `--lib`
+(alias `--dll`) does the same as `SCU_DLL`. `--device-id` is optional with one controller
 attached; `scu list` shows what is connected. Allow Python through the
 Windows firewall for Channel Access (UDP/TCP 5064, UDP 5065).
+
+### Linux, stock USB firmware
+
+The Linux SDK (1.5.16) has the same C API as the Windows DLL; only x86 and
+x86-64 builds are supplied, so no ARM. Copy
+`SDK/Redistributables/x86_64/` somewhere sensible, e.g. `/opt/smaract/lib`,
+and point the IOC at it:
+
+```sh
+scu list --lib /opt/smaract/lib/libscu3dcontrol.so
+scu-ioc --lib /opt/smaract/lib/libscu3dcontrol.so --prefix 24IDC:SCU:
+```
+
+libscu3dcontrol.so needs libftd2xx.so but carries no RPATH. The backend
+preloads libftd2xx.so from the same directory, so LD_LIBRARY_PATH is not
+needed when they sit together (as in Redistributables).
+
+Two host settings matter, because D2XX talks to the device through usbfs
+rather than a tty:
+
+1. **The kernel's `ftdi_sio` driver must not hold the SCU.** If it does,
+   the SCU appears as `/dev/ttyUSB*` and the SDK reports an initialisation
+   error. `sudo rmmod ftdi_sio` is fine for a quick test, but it
+   detaches every FTDI serial adapter on the host.
+2. **The IOC user needs write access** to the device node under
+   `/dev/bus/usb`.
+
+A udev rule handles both for just this device. Find its IDs with `lsusb`
+and `udevadm info -a -n /dev/ttyUSB0` (while ftdi_sio still has it). The
+SDK doesn't set a custom VID/PID, so expect FTDI's 0403:6001. Then create
+`/etc/udev/rules.d/99-smaract-scu.rules`:
+
+```
+# SmarAct SCU: usable via libftd2xx by group plugdev, with ftdi_sio detached
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", ATTRS{serial}=="<SERIAL>", MODE="0660", GROUP="plugdev"
+ACTION=="add", SUBSYSTEM=="usb", DRIVER=="ftdi_sio", ATTRS{serial}=="<SERIAL>", RUN+="/bin/sh -c 'echo %k > /sys/bus/usb/drivers/ftdi_sio/unbind'"
+```
+
+Reload with `sudo udevadm control --reload && sudo udevadm trigger`, then
+replug. `scu list` should show the device ID.
+
+**In a container:** keep the udev rule on the host. In the container, pass
+`/dev/bus/usb` (or the specific bus/device node), put the SDK libraries in
+the image, and give the IOC `--lib`. A device attached over USB/IP is
+handled the same way on the host that imports it.
 
 ### Serial (RS-232 or ASCII firmware)
 
@@ -87,7 +132,7 @@ per-axis PVs are `$(PREFIX)$(AXIS):NAME`, with AXIS defaulting to A, B, C.
 | --- | --- | --- |
 | `CONNECTED` | bi | Disconnected / Connected |
 | `MODEL`, `DEVICE_ID`, `FIRMWARE` | stringin | from the controller |
-| `BACKEND`, `VERSION` | stringin | `dll` or `ascii`; IOC version |
+| `BACKEND`, `VERSION` | stringin | `sdk` or `ascii`; IOC version |
 | `TEMPERATURE` | ai | °C, every 5 s |
 | `HV` | ai | internal 100 V supply, V |
 | `STOP_ALL` | bo | write 1 |
@@ -170,12 +215,14 @@ pytest
 The protocol, simulator, ASCII backend (over a pty) and CLI tests take
 about a second. `tests/test_ioc.py` runs `scu-sim` plus `scu-ioc` as
 subprocesses and drives them with caproto (about 15 s; skipped without
-caproto). The DLL backend is tested against a fake DLL object.
+caproto). The SDK backend is tested against a fake library object, plus a
+check that missing symbols are bound as "not supported".
 
 ## Known gaps
 
-- **DLL backend has only been tested against a fake DLL**, not the real
-  SCU3DControl.dll or hardware. Argument order and units follow the header
+- **SDK backend:** it has run against hardware on Windows (DLL). On Linux,
+  only loading libscu3dcontrol.so 1.5.16 and its no-device error path have
+  been exercised, not real hardware. Argument order and units follow the header
   and Programmer's Guide; the ctypes binding assumes cdecl (the header
   declares no calling convention, which is moot on x64).
 - **ASCII backend has only been tested against the simulator.** In
@@ -183,8 +230,8 @@ caproto). The DLL backend is tested against a fake DLL object.
   firmware accepts one decimal place (which the IOC sends for sub-µm
   targets) is unverified. If it doesn't, `LAST_ERROR` will show a parse,
   syntax or parameter error.
-- **pythonSoftIOC on Windows** is expected to install from wheels, but this
-  IOC has not been run there yet.
+- **PV Access on Windows:** the bundled pvxs server fails to start
+  (`event_base_new() fails`), so the IOC serves Channel Access only.
 - **Not exposed:** move to end stop (MES), scale offset and inversion (SSC),
   vertical alignment (SPA), the target-reached threshold and gain channel
   properties (SCP), and the keep-alive timer (K).
