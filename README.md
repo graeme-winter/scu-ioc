@@ -30,6 +30,13 @@ Layout:
 | `sim.py` | ASCII-protocol simulator; `scu-sim` serves it on a pty |
 | `ioc.py` | pythonSoftIOC records and worker thread; `scu-ioc` entry point |
 | `cli.py` | `scu` bench tool over either backend |
+| `wire.py` | SCU binary protocol map (stock USB firmware), reconstructed; see `docs/wire-protocol.md` |
+| `wire_sim.py` | Binary‑protocol simulator; `scu-wire-sim` serves it on a pty |
+
+`tools/ftrace/` has the capture shim, trace decoder and capture session
+used to check the binary protocol map against real hardware. There is no
+backend for the binary protocol yet; that's the route to running on a
+Raspberry Pi without SmarAct's x86‑only SDK.
 
 ## Install and run
 
