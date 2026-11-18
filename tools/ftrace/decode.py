@@ -107,7 +107,7 @@ def main(argv=None):
                 if f[0] not in (exp, W.R_ERROR) and exp != "raw":
                     problems.append(f"line {lineno}: reply {f.hex(' ')} to {req.hex(' ')}; "
                                     f"map expected header 0x{exp:02x}")
-                if f[0] == W.R_ACK and req[0] not in (W.SET_MODE,) and f[1:2] != req[1:2]:
+                if f[0] == W.R_ACK and req[0] not in (W.SET_MODE, W.SET_SYSTEM_PROP) and f[1:2] != req[1:2]:
                     problems.append(f"line {lineno}: ack channel {f[1]} != request channel {req[1]}")
 
     print("\n== requests seen")

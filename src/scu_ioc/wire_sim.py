@@ -27,6 +27,8 @@ E_NO_SENSOR = 130
 E_WRONG_SENSOR = 131
 E_NOT_PROCESSABLE = 138
 E_INVALID_CHANNEL = 6     # host-side in the SDK; used here for bad channels
+E_INVALID_PARAMETER = 9   # firmware 5.1.192: unsupported property -> E2 FF 09
+DEVICE = 0xFF             # channel byte for device-level acks and errors
 
 
 class _Err(Exception):
@@ -36,7 +38,11 @@ class _Err(Exception):
 
 class WireSCU:
     def __init__(self, sensor_types=(21, 21, 21), device_id=604573714,
-                 firmware=(5, 1, 192), clock=time.monotonic):
+                 firmware=(5, 1, 192), clock=time.monotonic,
+                 channel_properties=True):
+        """channel_properties=False mimics firmware 5.1.192, which rejects
+        the movement-type channel property."""
+        self.channel_properties = channel_properties
         self.axes = [SimAxis(t, clock) for t in sensor_types]
         self.device_id = device_id
         self.firmware = firmware
@@ -112,13 +118,13 @@ class WireSCU:
 
         if hdr == W.SET_MODE:
             self.mode = v[0]
-            return self._ack(v[0])
+            return self._ack(DEVICE)       # hardware acks device commands with 0xFF
         if hdr == W.GET_SYSTEM_PROP:
             key = v[0]
             vals = {W.PROP_TEMPERATURE: self.temperature, W.PROP_VOLTAGE: 1000,
                     W.PROP_HW_VERSION: 7}
             if key not in vals:
-                raise _Err(0xFF, E_NOT_SUPPORTED)
+                raise _Err(DEVICE, E_INVALID_PARAMETER)
             return [R(W.R_SYSTEM_PROP, key, vals[key])]
 
         ch = v[0]
@@ -139,11 +145,11 @@ class WireSCU:
             a.step(steps, amp, freq)
         elif hdr == W.GET_CHANNEL_PROP:
             key = v[1]
-            if key == W.PROP_MOVEMENT_TYPE:
+            if key == W.PROP_MOVEMENT_TYPE and self.channel_properties:
                 return [R(W.R_CHANNEL_PROP, ch, key, 1 if a.rotary else 0)]
-            if key == W.PROP_DEFAULT_CL_FREQ:
+            if key == W.PROP_DEFAULT_CL_FREQ and self.channel_properties:
                 return [R(W.R_CHANNEL_PROP, ch, key, 5000)]
-            raise _Err(ch, E_NOT_SUPPORTED)
+            raise _Err(DEVICE, E_INVALID_PARAMETER)   # as firmware 5.1.192
         else:
             a = self._axis(ch, need_sensor=True)
             if hdr in (W.MOVE_POS_ABS, W.MOVE_POS_REL):
@@ -223,9 +229,12 @@ def main(argv=None):
     ap.add_argument("--link", default="/tmp/scu-wire")
     ap.add_argument("--sensors", default="21,21,21",
                     help="sensor type per channel, 0 = none (default 21,21,21)")
+    ap.add_argument("--no-channel-properties", action="store_true",
+                    help="reject channel properties like firmware 5.1.192")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args(argv)
-    sim = WireSCU(sensor_types=[int(x) for x in a.sensors.split(",")])
+    sim = WireSCU(sensor_types=[int(x) for x in a.sensors.split(",")],
+                  channel_properties=not a.no_channel_properties)
     path, t = serve_pty(sim, a.link, a.verbose)
     print(f"SCU wire simulator on {path} -> {a.link}", flush=True)
     try:

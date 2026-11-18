@@ -14,7 +14,7 @@ def test_identity():
     assert ask(sim, W.GET, W.SEL_ID, 0xF7) == ("id", (604573714,))
     name, v = ask(sim, W.GET, W.SEL_FIRMWARE, 0)
     assert W.firmware_version(bytes(v)) == (5 << 24) | (1 << 16) | 192
-    assert ask(sim, W.SET_MODE, 0) == ("ack", (0,))
+    assert ask(sim, W.SET_MODE, 0) == ("ack", (0xFF,))
 
 
 def test_move_and_status(clock):
@@ -38,3 +38,8 @@ def test_properties():
     sim = WireSCU(sensor_types=(21, 19, 0))
     assert ask(sim, W.GET_CHANNEL_PROP, 1, W.PROP_MOVEMENT_TYPE) == ("channel_property", (1, 25, 1))
     assert ask(sim, W.GET_SYSTEM_PROP, W.PROP_TEMPERATURE) == ("system_property", (1, 31))
+
+
+def test_firmware_5_1_192_rejects_channel_properties():
+    sim = WireSCU(channel_properties=False)
+    assert ask(sim, W.GET_CHANNEL_PROP, 0, W.PROP_MOVEMENT_TYPE) == ("error", (0xFF, 9))

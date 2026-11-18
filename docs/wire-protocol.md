@@ -13,13 +13,28 @@ this document gives the evidence and confidence.
 
 | Level | Meaning |
 | --- | --- |
+| **Hardware‑checked** | Seen in captures from a real CU‑3D (firmware 5.1.192, ID 654905362) through the SDK, including calibration and referencing; `tests/data/` holds the exchanges and `tests/test_wire_backend.py` replays them. |
 | **Vendor‑checked** | SmarAct's library sent these bytes, and accepted the simulator's replies built from this map (`tests/test_wire_sdk.py`). Layouts are right as far as the library's encoder and parser go. |
 | **Static only** | Read from the disassembly, not exercised. |
 | **Unknown** | Needs a hardware capture. |
 
-What vendor‑checking cannot show is how the *firmware* behaves (timing,
-which errors it returns, status sequences during moves). Only a capture
-against a real SCU shows that; see `tools/ftrace/README.md`.
+Two hardware captures (Nov 2026) decoded cleanly, with every frame matching the
+map. Every command and get that the IOC uses is hardware‑checked except
+`move to end stop` and the angle commands, which need rotary or end‑stop
+positioners. What the firmware showed:
+
+- Latency: about 0.5 ms median from request to reply (p95 1.4 ms, 118
+  exchanges) with the 1 ms latency timer. The first exchange after opening
+  the port took 238 ms.
+- Device‑level replies use channel byte `FF`: `81 00` is acknowledged with
+  `A1 FF`.
+- Firmware 5.1.192 rejects `53` (get channel property, key 25) with
+  `E2 FF 09`, so it has no movement‑type property.
+- The ignored byte in the `15` firmware reply is `00`.
+- Status sequences: closed‑loop moves go 3 → 0, held moves 3 → 4 (holding),
+  open‑loop steps 2 → 0, and stop gives 0 immediately.
+- The errors seen were 131 (wrong sensor type, e.g. GetAngle on a linear axis) and
+  130 (no sensor).
 
 ## Link
 
@@ -54,8 +69,8 @@ Units are the SDK's: position in 1/10 µm, angle in 1/10 m°, amplitude in
 
 | Header | Payload | Meaning |
 | --- | --- | --- |
-| `A1` | ch | acknowledge; the library checks ch matches the request |
-| `E2` | ch, code | error; `code` is returned as the SA status (128+ device errors, e.g. 130 no sensor, 131 wrong sensor type) |
+| `A1` | ch | acknowledge; ch matches the request, or `FF` for device‑level commands (hardware‑checked) |
+| `E2` | ch, code | error; `code` is returned as the SA status (128+ device errors, e.g. 130 no sensor, 131 wrong sensor type); ch `FF` for device‑level errors |
 
 Any other header where an ack or error is expected gives
 `SA_PROTOCOL_ERROR` (14); a short read gives `SA_TIMEOUT_ERROR` (15).
@@ -113,7 +128,7 @@ All answered with `A1 ch` or `E2 ch code` unless noted.
 | `56` | set system property | u16 key, i32 value | static only |
 | `57` | set channel property | ch, u16 key, i32 value | static only |
 | `72` | set safe direction | ch, u8 (stored in NV memory) | vendor‑checked |
-| `81` | set communication mode | u8 (0 sync; 1 async, inferred) → `A1 mode` | vendor‑checked for 0 |
+| `81` | set communication mode | u8 (0 sync; 1 async, inferred) → `A1 FF` | hardware‑checked for 0 |
 | `B2` | get system property | u16 key → `66` u16 key, i32 value | vendor‑checked (keys 1, 2) |
 | `C0` | hardware reset | none → one raw byte, then `20` within 2 s | static only (SA_HARDWARE_RESET) |
 
@@ -137,7 +152,7 @@ Observed from the library:
    against it, and non‑matching devices are closed.
 3. `12 01 xx` → `15 …` firmware version.
 4. Only for SA_HARDWARE_RESET: `C0` → one byte, then `20`.
-5. `81 00` → `A1 00` (synchronous mode).
+5. `81 00` → `A1 FF` (synchronous mode).
 
 After the `81` acknowledgement the library performs some extra reads
 (static only; possibly draining stale async packets).
@@ -145,14 +160,12 @@ After the `81` acknowledgement the library performs some extra reads
 `SA_ReleaseDevices` sends nothing: it just closes the FTDI handle
 (**vendor‑checked**).
 
-## Open questions for the hardware capture
+## Open questions
 
-- Firmware: is the ignored byte in the `15` reply constant? Does the
-  device need any delay between frames at 500 kbaud?
-- Status sequences during real moves, holds, calibration and referencing,
-  and the timing of each phase.
-- Which errors the firmware actually returns, e.g. end stop reached (132)
-  and command overridden (133).
+- Does the device need any delay between frames at 500 kbaud? None was
+  needed at SDK pacing.
+- Which other errors the firmware returns, e.g. end stop reached (132) and
+  command overridden (133).
 - Recovery via `FT_CyclePort` / `SA_Recover`.
 - Async mode (`81 01`, `32`) and its unsolicited packets, which would
   allow event‑driven completion instead of polling. Static analysis only so
