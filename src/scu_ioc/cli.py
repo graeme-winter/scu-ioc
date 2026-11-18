@@ -191,7 +191,7 @@ def _run_speed(a, b) -> int:
                 continue
             vp, vm = up.fit.speed, down.fit.speed
             mean = (vp + vm) / 2
-            asym = 100 * (vp - vm) / mean
+            asym = round(100 * (vp - vm) / mean, 1) + 0.0   # no "-0.0%"
             print(f"{f:8d} {vp:10.1f} {vm:10.1f} {asym:+6.1f}% {1000 * mean / f:7.1f}n "
                   f"{max(up.fit.rms, down.fit.rms):6.2f} {n:8d} {every:>8}")
     except RasterAborted as e:
