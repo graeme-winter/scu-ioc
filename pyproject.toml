@@ -17,6 +17,7 @@ dev = ["pytest", "caproto"]
 [project.scripts]
 scu-ioc = "scu_ioc.ioc:main"
 scu-sim = "scu_ioc.sim:main"
+scu-wire-sim = "scu_ioc.wire_sim:main"
 scu = "scu_ioc.cli:main"
 
 [tool.setuptools.packages.find]
