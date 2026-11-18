@@ -124,7 +124,8 @@ def _run_fly(a, b, fast, slow) -> int:
             return
         hit = [t for t in times if t is not None]
         first = f"{(hit[0] - t_trig) * 1000:.1f} ms" if hit else "never"
-        print(f"  row {r + 1}/{nrows}: {fit.speed:.1f} um/s, rms {fit.rms:.2f} um "
+        sign = "+" if (r % 2 == 0) == (fast.points[-1] > fast.points[0]) else "-"
+        print(f"  row {r + 1}/{nrows} ({sign}): {fit.speed:.1f} um/s, rms {fit.rms:.2f} um "
               f"(max {fit.max_dev:.2f}), {fit.n} samples, first point at {first} "
               f"after trigger, {len(hit)}/{len(times)} points crossed, {elapsed:.1f} s",
               flush=True)
@@ -142,13 +143,17 @@ def _run_fly(a, b, fast, slow) -> int:
         trig.close()
     fits = [f for f in r.row_fits if f]
     if fits:
-        sp = [f.speed for f in fits]
-        print(f"{r.rows_done} rows in {r.elapsed:.1f} s at {r.frequency} Hz; speed "
-              f"{min(sp):.1f}..{max(sp):.1f} um/s (mean {sum(sp) / len(sp):.1f}); "
-              f"worst row rms {max(f.rms for f in fits):.2f} um")
-        if r.target_speed:
+        print(f"{r.rows_done} rows in {r.elapsed:.1f} s; worst row rms "
+              f"{max(f.rms for f in fits):.2f} um")
+        for d, label in ((+1, "+"), (-1, "-")):
+            sp = [f.speed for f, dd in zip(r.row_fits, r.row_dirs) if f and dd == d]
+            if not sp:
+                continue
             mean = sum(sp) / len(sp)
-            print(f"mean speed is {100 * (mean / r.target_speed - 1):+.1f}% from target")
+            extra = (f", {100 * (mean / r.target_speed - 1):+.1f}% from target"
+                     if r.target_speed else "")
+            print(f"  {label} rows at {r.frequencies[d]} Hz: {min(sp):.1f}..{max(sp):.1f} "
+                  f"um/s (mean {mean:.1f}){extra}")
     for path in (a.log, a.trajectory):
         if path:
             print(f"log: {path}")
@@ -168,21 +173,26 @@ def _run_speed(a, b) -> int:
         return 1
     orig = cfg.cl_max_frequency
     lo, hi = a.center - a.distance / 2, a.center + a.distance / 2
-    print(f"{'ABC'[ch]}: test moves between {lo:.1f} and {hi:.1f} "
+    print(f"{'ABC'[ch]}: test moves between {lo:.1f} and {hi:.1f}, both directions "
           f"(started at {b.position(ch, cfg.rotary):.1f})")
-    print(f"{'freq Hz':>8} {'speed /s':>10} {'per Hz':>8} {'rms':>6} {'samples':>8} {'every':>8}")
+    print(f"{'freq Hz':>8} {'+ speed/s':>10} {'- speed/s':>10} {'asym':>7} {'per Hz':>8} "
+          f"{'rms':>6} {'samples':>8} {'every':>8}")
     rc = 0
     try:
-        for i, f in enumerate(a.freq):
-            s, e = (lo, hi) if i % 2 == 0 else (hi, lo)
-            m = measure_speed(b, ch, cfg.rotary, s, e, f)
-            every = f"{m.interval_ms:.1f} ms"
-            if m.fit is None:
-                print(f"{f:8d} {'-':>10} {'-':>8} {'-':>6} {m.samples:8d} {every:>8}"
-                      "  too few samples: use a longer --distance")
-            else:
-                print(f"{f:8d} {m.fit.speed:10.1f} {1000 * m.fit.speed / f:7.1f}n "
-                      f"{m.fit.rms:6.2f} {m.samples:8d} {every:>8}")
+        for f in a.freq:
+            up = measure_speed(b, ch, cfg.rotary, lo, hi, f)
+            down = measure_speed(b, ch, cfg.rotary, hi, lo, f)
+            every = f"{max(up.interval_ms, down.interval_ms):.1f} ms"
+            n = min(up.samples, down.samples)
+            if up.fit is None or down.fit is None:
+                print(f"{f:8d} {'-':>10} {'-':>10} {'-':>7} {'-':>8} {'-':>6} {n:8d} "
+                      f"{every:>8}  too few samples: use a longer --distance")
+                continue
+            vp, vm = up.fit.speed, down.fit.speed
+            mean = (vp + vm) / 2
+            asym = 100 * (vp - vm) / mean
+            print(f"{f:8d} {vp:10.1f} {vm:10.1f} {asym:+6.1f}% {1000 * mean / f:7.1f}n "
+                  f"{max(up.fit.rms, down.fit.rms):6.2f} {n:8d} {every:>8}")
     except RasterAborted as e:
         print(f"stopped: {e}", file=sys.stderr)
         b.stop(ch)

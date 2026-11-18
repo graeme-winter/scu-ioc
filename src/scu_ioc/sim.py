@@ -102,9 +102,13 @@ class SimAxis:
                         then if then is not None else status, hold_ms)
         self.status = status
 
+    asymmetry = 0.0     # closed-loop speed x (1 + a) moving +, x (1 - a) moving -
+
     def move_to(self, logical_target, hold_ms):
-        self._start(logical_target + self.offset, self.cl_freq * CL_STEP_UM,
-                    P.TARGETING, hold_ms)
+        self.update()
+        target = logical_target + self.offset
+        k = 1 + self.asymmetry if target >= self.phys else 1 - self.asymmetry
+        self._start(target, self.cl_freq * CL_STEP_UM * k, P.TARGETING, hold_ms)
 
     def step(self, n, amplitude, frequency):
         self.amplitude, self.frequency = amplitude, frequency

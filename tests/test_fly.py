@@ -64,7 +64,8 @@ def test_fly_scan(stage, tmp_path):
                 run_up=20, trigger=trig, log_path=str(log), trajectory_path=str(traj),
                 log=lambda *_: None)
     assert r.aborted is None and r.rows_done == 3 and trig.n == 3
-    assert r.frequency == pytest.approx(10000, rel=0.01)   # 20 um x 50 Hz = 1000 um/s
+    assert r.frequencies[+1] == pytest.approx(10000, rel=0.01)   # 20 um x 50 Hz = 1000 um/s
+    assert r.frequencies[-1] == pytest.approx(10000, rel=0.01)
     assert all(f.speed == pytest.approx(1000, rel=0.05) for f in r.row_fits)
     rows = list(csv.DictReader(open(log)))
     assert len(rows) == 33 and all(x["t_cross"] for x in rows)
@@ -125,4 +126,25 @@ def test_speed_command_centres_on_zero(stage, capsys):
     assert cli.main(["--backend", "wire", "--port", port, "speed", "A",
                      "--freq", "18500", "--distance", "2000"]) == 0
     out = capsys.readouterr().out
-    assert "between -1000.0 and 1000.0" in out and "1850.0" in out
+    assert "between -1000.0 and 1000.0" in out and "1850.0" in out and "+0.0%" in out
+
+
+def test_asymmetric_slide_gets_per_direction_frequencies(tmp_path):
+    sim = WireSCU(sensor_types=(21, 21, 0), asymmetry=0.1)   # +10% / -10%
+    path, _ = serve_pty(sim)
+    b = WireBackend(path)
+    b.connect()
+    for ch in (0, 1):
+        b.reference(ch, 0, True)
+    for ch in (0, 1):
+        while b.status(ch) in P.BUSY:
+            pass
+    r = run_fly(b, Line(0, -100, 100, 20), Line(1, 0, 30, 10), frame_rate=50,
+                run_up=20, log=lambda *_: None)
+    assert r.aborted is None
+    assert r.frequencies[+1] == pytest.approx(10000 / 1.1, rel=0.03)
+    assert r.frequencies[-1] == pytest.approx(10000 / 0.9, rel=0.03)
+    assert r.row_dirs == [1, -1, 1, -1]
+    # both directions now run at the target speed
+    assert all(f.speed == pytest.approx(1000, rel=0.05) for f in r.row_fits)
+    b.close()

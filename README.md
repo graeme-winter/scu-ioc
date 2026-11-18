@@ -231,18 +231,24 @@ scu --backend wire --port /dev/smaract-scu raster \
 **Speed.** The SCU has no velocity setting. In a long closed‑loop move the
 speed is set by the closed‑loop maximum step frequency (50–18,500 Hz) times
 the positioner's step length, which depends on the slide, load and
-amplitude. So the speed is calibrated: the target is `--fly-speed` µm/s, or
-the fast STEP × `--frame-rate`. Test moves over the first row measure the
-speed, then the frequency is scaled until it's within 5%. `--fly-freq HZ`
-skips calibration and uses that frequency. The fast axis's original
-frequency is restored afterwards. To see how your slides behave:
+amplitude, and it can differ between directions. So the speed is calibrated:
+the target is `--fly-speed` µm/s, or the fast STEP × `--frame-rate`. Test
+moves over the first row's span measure the speed, and the frequency is
+scaled until it's within 5%. This is done **separately for each direction**,
+because serpentine rows alternate, so + rows and − rows can use different
+frequencies. `--fly-freq HZ` skips calibration and uses one frequency both
+ways. The fast axis's original frequency is restored afterwards. To see how
+your slides behave:
 
 ```sh
 scu --backend wire --port /dev/smaract-scu speed A --freq 1000 2000 5000 10000 18500 --distance 2000
 ```
 
-This prints the measured speed, the step length per Hz and the
-non‑uniformity at each frequency.
+This prints, for each frequency, the speed in each direction, the
+asymmetry between them, the mean step length per Hz, the non‑uniformity, and
+the number and spacing of position samples. Test moves are centred on
+`--center` (default 0), and a move that stops short (an end stop) ends the
+test.
 
 **What gets recorded.** During each row the fast axis is sampled about
 every millisecond on the `wire` backend with a 1 ms latency timer. Each

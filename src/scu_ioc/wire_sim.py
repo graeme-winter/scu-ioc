@@ -39,11 +39,13 @@ class _Err(Exception):
 class WireSCU:
     def __init__(self, sensor_types=(21, 21, 21), device_id=604573714,
                  firmware=(5, 1, 192), clock=time.monotonic,
-                 channel_properties=True):
+                 channel_properties=True, asymmetry=0.0):
         """channel_properties=False mimics firmware 5.1.192, which rejects
         the movement-type channel property."""
         self.channel_properties = channel_properties
         self.axes = [SimAxis(t, clock) for t in sensor_types]
+        for a in self.axes:
+            a.asymmetry = asymmetry
         self.device_id = device_id
         self.firmware = firmware
         self.mode = 0
@@ -231,10 +233,12 @@ def main(argv=None):
                     help="sensor type per channel, 0 = none (default 21,21,21)")
     ap.add_argument("--no-channel-properties", action="store_true",
                     help="reject channel properties like firmware 5.1.192")
+    ap.add_argument("--asymmetry", type=float, default=0.0,
+                    help="closed-loop speed x(1+A) moving +, x(1-A) moving - (default 0)")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args(argv)
     sim = WireSCU(sensor_types=[int(x) for x in a.sensors.split(",")],
-                  channel_properties=not a.no_channel_properties)
+                  channel_properties=not a.no_channel_properties, asymmetry=a.asymmetry)
     path, t = serve_pty(sim, a.link, a.verbose)
     print(f"SCU wire simulator on {path} -> {a.link}", flush=True)
     try:

@@ -169,18 +169,16 @@ def calibrate_frequency(b: Backend, ch: int, rot: bool, a: float, z: float,
     a or z. Returns (frequency, measured Fit)."""
     f = int(min(max(f0, F_MIN), F_MAX))
     fit = None
-    ends = [(a, z), (z, a)]
     for i in range(max_iter):
-        s, e = ends[i % 2]
-        meas = measure_speed(b, ch, rot, s, e, f, stop_event)
+        meas = measure_speed(b, ch, rot, a, z, f, stop_event)
         fit = meas.fit
         if fit is None:
             raise RasterAborted(
                 f"calibration: only {meas.samples} samples ({meas.interval_ms:.1f} ms apart) "
                 "in the move; the row is too short for this speed, or sampling is slow "
                 "(FTDI latency timer?)")
-        log(f"  calibrate: {f} Hz -> {fit.speed:.1f}/s (target {target:.1f}/s, "
-            f"rms {fit.rms:.2f})")
+        log(f"  calibrate {'+' if z > a else '-'}: {f} Hz -> {fit.speed:.1f}/s "
+            f"(target {target:.1f}/s, rms {fit.rms:.2f})")
         if abs(fit.speed / target - 1) <= tol:
             return f, fit
         f_new = int(round(min(max(f * target / fit.speed, F_MIN), F_MAX)))
@@ -192,14 +190,34 @@ def calibrate_frequency(b: Backend, ch: int, rot: bool, a: float, z: float,
     return f, fit
 
 
+def calibrate_directions(b: Backend, ch: int, rot: bool, a: float, z: float,
+                         target: float, f0: int, tol: float = 0.05, log=print,
+                         stop_event=None) -> dict:
+    """Calibrate each direction separately (serpentine rows alternate, and
+    a slide need not be equally fast both ways). Returns {+1: Hz, -1: Hz}
+    keyed by the sign of the motion in axis coordinates."""
+    lo, hi = min(a, z), max(a, z)
+    fp, _ = calibrate_frequency(b, ch, rot, lo, hi, target, f0, tol, log=log,
+                                stop_event=stop_event)
+    fm, _ = calibrate_frequency(b, ch, rot, hi, lo, target, fp, tol, log=log,
+                                stop_event=stop_event)
+    return {+1: fp, -1: fm}
+
+
 @dataclass
 class FlyResult:
     rows_done: int
     elapsed: float
-    frequency: int
+    frequencies: dict              # {+1: Hz, -1: Hz} by direction of motion
     target_speed: float | None
     row_fits: list = field(default_factory=list)   # Fit | None per row
+    row_dirs: list = field(default_factory=list)   # +1 / -1 per row
     aborted: str | None = None
+
+    @property
+    def frequency(self) -> int:
+        """Single frequency when both directions use the same one."""
+        return self.frequencies[+1]
 
 
 def run_fly(b: Backend, fast: Line, slow: Line, *, frame_rate: float | None = None,
@@ -230,7 +248,8 @@ def run_fly(b: Backend, fast: Line, slow: Line, *, frame_rate: float | None = No
         return first - d * run_up, last + d * run_up, first, last
 
     t0 = time.monotonic()
-    result = FlyResult(0, 0.0, cl_freq or orig_freq or 0, target)
+    f_default = int(cl_freq or orig_freq or 5000)
+    result = FlyResult(0, 0.0, {+1: f_default, -1: f_default}, target)
     pf = open(log_path, "w", newline="") if log_path else None
     tf = open(trajectory_path, "w", newline="") if trajectory_path else None
     pw = csv.writer(pf) if pf else None
@@ -244,13 +263,10 @@ def run_fly(b: Backend, fast: Line, slow: Line, *, frame_rate: float | None = No
     try:
         if cl_freq is None and target:
             a, z, _, _ = row_ends(0)
-            freq, _ = calibrate_frequency(b, fch, rot[fch], a, z, target,
-                                          orig_freq or 5000, calibration_tolerance,
-                                          log=log, stop_event=stop_event)
-        else:
-            freq = cl_freq or orig_freq
-        result.frequency = int(freq)
-        b.set_cl_max_frequency(fch, int(freq))
+            result.frequencies = calibrate_directions(
+                b, fch, rot[fch], a, z, target, orig_freq or 5000,
+                calibration_tolerance, log=log, stop_event=stop_event)
+        current_freq = None
 
         for r, s in enumerate(spts):
             start, end, first, last = row_ends(r)
@@ -260,6 +276,11 @@ def run_fly(b: Backend, fast: Line, slow: Line, *, frame_rate: float | None = No
             _wait(b, [fch, sch], 120, stop_event)
             check_reached(b, fch, rot[fch], start, f"row {r} start")
             check_reached(b, sch, rot[sch], s, f"row {r} slow position")
+            d = 1 if end > start else -1
+            f = int(result.frequencies[d])
+            if f != current_freq:
+                b.set_cl_max_frequency(fch, f)
+                current_freq = f
             if settle > 0:
                 time.sleep(settle)
             t_trig = time.monotonic() - t0
@@ -269,6 +290,7 @@ def run_fly(b: Backend, fast: Line, slow: Line, *, frame_rate: float | None = No
             row_end_pos = samples[-1][1]
             fit = fit_speed(samples, first, last)
             result.row_fits.append(fit)
+            result.row_dirs.append(d)
             row_pts = fpts if r % 2 == 0 else fpts[::-1]
             cols = range(len(fpts)) if r % 2 == 0 else range(len(fpts) - 1, -1, -1)
             times = crossing_times(samples, row_pts)
