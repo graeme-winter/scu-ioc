@@ -106,6 +106,7 @@ _SIGNATURES = {
     "SA_MoveAngleRelative_S": [U, U, I, I, U],
     "SA_CalibrateSensor_S": [U, U],
     "SA_MoveToReference_S": [U, U, U, U],
+    "SA_MoveToEndStop_S": [U, U, U, U, U],
     "SA_Stop_S": [U, U],
     "SA_GetStatus_S": [U, U, pU],
     "SA_GetPosition_S": [U, U, pI],
@@ -144,7 +145,8 @@ def _unsupported(*_args):
 
 def load_dll(path: str | None = None):
     path = path or default_dll_path()
-    libdir = Path(path).resolve().parent if os.path.dirname(path) else None
+    # abspath, not resolve(): honour a symlinked install directory
+    libdir = Path(os.path.abspath(path)).parent if os.path.dirname(path) else None
     if libdir is not None:
         if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
             os.add_dll_directory(str(libdir))
