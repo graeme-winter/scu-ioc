@@ -13,6 +13,7 @@ dependencies = ["softioc>=4.5", "pyserial>=3.5"]
 
 [project.optional-dependencies]
 dev = ["pytest", "caproto"]
+ca = ["caproto"]          # EPICS triggers for scu raster
 
 [project.scripts]
 scu-ioc = "scu_ioc.ioc:main"

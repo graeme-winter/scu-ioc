@@ -60,6 +60,53 @@ def describe(b: Backend, ch: int) -> str:
     return ", ".join(parts)
 
 
+def _raster_lines(a):
+    from .raster import Line
+    out = []
+    for spec in (a.fast, a.slow):
+        ch = parse_channel(spec[0])
+        start, end, step = (float(x) for x in spec[1:])
+        line = Line(ch, start, end, abs(step))
+        line.points                       # validates
+        out.append(line)
+    if out[0].channel == out[1].channel:
+        raise ValueError("fast and slow axes must differ")
+    return out
+
+
+def _run_raster(a, b, fast, slow) -> int:
+    from .raster import RasterAborted, make_trigger, run_raster
+    trig = make_trigger(a.trigger, a.pulse)
+    print(f"trigger: {trig.describe()}")
+    nf = len(fast.points)
+
+    def progress(pt, done, total, elapsed):
+        if a.quiet or (done % nf and done != total):
+            return
+        eta = elapsed / done * (total - done)
+        print(f"  row {pt.row + 1}/{total // nf}: {done}/{total} points, "
+              f"{elapsed:.1f} s, {elapsed / done * 1000:.0f} ms/point, ETA {eta:.0f} s",
+              flush=True)
+
+    try:
+        r = run_raster(b, fast, slow, dwell=a.dwell, settle=a.settle, hold_ms=a.hold,
+                       trigger=trig, log_path=a.log, tolerance=a.tolerance,
+                       allow_unreferenced=a.allow_unreferenced, progress=progress)
+    except RasterAborted as e:
+        print(f"not started: {e}", file=sys.stderr)
+        return 1
+    finally:
+        trig.close()
+    errs = ", ".join(f"{'ABC'[c]} {v:.1f}" for c, v in r.max_error.items())
+    print(f"{r.points_done} points in {r.elapsed:.1f} s; max |position - target|: {errs}")
+    if a.log:
+        print(f"log: {a.log}")
+    if r.aborted:
+        print(f"ABORTED: {r.aborted} (axes stopped)", file=sys.stderr)
+        return 3
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="SmarAct SCU bench tool")
     ap.add_argument("--backend", choices=["sdk", "dll", "wire", "ascii"], default="sdk",
@@ -100,11 +147,49 @@ def main(argv=None) -> int:
     p.add_argument("code", type=int)
     p = sub.add_parser("stop")
     p.add_argument("channel", type=parse_channel, nargs="?")
+    p = sub.add_parser("raster", help="serpentine step-and-shoot raster (see --help)",
+                       description="Serpentine step-and-shoot raster. At each point: "
+                       "absolute move, wait for target reached, settle, read back, "
+                       "trigger, dwell. Positions in um (mdeg for rotary axes).")
+    p.add_argument("--fast", nargs=4, required=True, metavar=("AXIS", "START", "END", "STEP"),
+                   help="fast axis (A/B/C) and its points, e.g. --fast A -12000 12000 50")
+    p.add_argument("--slow", nargs=4, required=True, metavar=("AXIS", "START", "END", "STEP"),
+                   help="slow axis, one row per point")
+    p.add_argument("--dwell", type=float, default=0.0, help="time at each point after the trigger, s")
+    p.add_argument("--settle", type=float, default=0.0,
+                   help="extra wait after target reached, before read-back and trigger, s")
+    p.add_argument("--hold", type=int, default=0,
+                   help="hold time for each move, ms (keeps the controller correcting)")
+    p.add_argument("--trigger", default="none",
+                   help="none | serial:PORT[:dtr|rts][:low|high] | ca:PV[=VALUE]")
+    p.add_argument("--pulse", type=float, default=1.0, help="serial trigger pulse width, ms")
+    p.add_argument("--log", help="CSV log of every point (targets, positions, times)")
+    p.add_argument("--tolerance", type=float,
+                   help="abort if a settled position is further than this from target")
+    p.add_argument("--allow-unreferenced", action="store_true")
+    p.add_argument("--speed", type=float,
+                   help="assumed closed-loop speed, um/s, for the time estimate")
+    p.add_argument("--dry-run", action="store_true", help="print the plan and exit")
+    p.add_argument("--quiet", action="store_true", help="no per-row progress")
+
     p = sub.add_parser("raw", help="ascii: send one command, print the answer")
     p.add_argument("command")
 
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.WARNING)
+
+    if a.cmd == "raster":
+        try:
+            fast, slow = _raster_lines(a)
+        except (ValueError, argparse.ArgumentTypeError) as e:
+            ap.error(str(e))
+        from .raster import estimate_seconds, summarize
+        print(summarize(fast, slow))
+        if a.speed:
+            t = estimate_seconds(fast, slow, a.speed, a.dwell, a.settle)
+            print(f"estimated time at {a.speed:g} um/s: {t / 60:.1f} min")
+        if a.dry_run:
+            return 0
 
     if a.backend in ("sdk", "dll"):
         from .dll import DllBackend, available_devices
@@ -138,6 +223,8 @@ def main(argv=None) -> int:
             for ch in range(info.channels):
                 print("  " + describe(b, ch))
             return 0
+        if a.cmd == "raster":
+            return _run_raster(a, b, fast, slow)
         if a.cmd == "stop":
             for ch in ([a.channel] if a.channel is not None else range(info.channels)):
                 b.stop(ch)

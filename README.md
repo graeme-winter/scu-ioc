@@ -165,6 +165,55 @@ channel); `--poll` sets the idle poll period (default 1 s) and
 `--no-shell` disables the interactive Python shell (use under procServ);
 `-v` logs all controller traffic.
 
+## Raster scans
+
+`scu raster` runs a serpentine step‑and‑shoot raster over two axes,
+directly on the controller (any backend). Nothing else can use the
+controller while it runs, so stop the IOC first. At each point it:
+
+1. moves (absolute, closed loop) and waits for the controller to report
+   the target reached;
+2. waits `--settle` seconds;
+3. reads back both axes (the readback is checked against `--tolerance` if given);
+4. fires the trigger;
+5. dwells for `--dwell` seconds.
+
+Rows alternate direction, so within a row only the fast axis moves.
+
+```sh
+# 25 x 25 mm at 50 um pitch, centred on the reference position, fast = A (X), slow = B (Z)
+scu --backend wire --port /dev/smaract-scu raster \
+    --fast A -12500 12500 50 --slow B -12500 12500 50 \
+    --settle 0.005 --dwell 0.02 --tolerance 2 \
+    --trigger serial:/dev/ttyUSB1:dtr --pulse 1 --log run042.csv
+
+# check the plan and a time estimate without moving
+scu raster --fast A -12500 12500 50 --slow B -12500 12500 50 --dry-run --speed 1000
+```
+
+Each axis is given as `AXIS START END STEP` in µm (millidegrees for rotary
+axes). The range must be a whole number of steps, and the direction comes
+from START and END. Both axes must have sensors and be referenced
+(`--allow-unreferenced` overrides). Ctrl‑C, a move timeout, a controller
+error or a tolerance failure stops both axes and keeps the partial log.
+
+There's no hardware position compare, so a trigger here means "the stage
+has stopped at this point". Software jitter, of order a millisecond, affects
+*when* a shot fires, not *where*. Triggers:
+
+| `--trigger` | Output |
+| --- | --- |
+| `none` | no output; just dwell |
+| `serial:PORT[:dtr\|rts][:low\|high]` | pulses DTR or RTS on a separate USB‑serial adapter for `--pulse` ms. On TTL adapters an asserted line is electrically low, hence the default `low`. Wire it to a Zebra or detector TTL input (check levels and termination). |
+| `ca:PV[=VALUE]` | writes VALUE (default 1) to an EPICS PV and waits for completion, e.g. a Zebra soft input or a detector trigger PV. Needs `pip install '.[ca]'`. |
+
+`--log` writes one CSV row per point: index, row, column, targets, measured
+positions, and times relative to the start (move commanded, settled,
+triggered). That's the shot‑to‑position map for the data.
+
+`--hold MS` keeps the controller correcting at each target, which helps
+if the stage creeps during long dwells.
+
 ## PVs
 
 The prefix is used verbatim. Device-level PVs are `$(PREFIX)NAME`;
