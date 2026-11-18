@@ -1,3 +1,4 @@
+import time
 import csv
 import threading
 
@@ -49,7 +50,7 @@ def stage():
         b.reference(ch, 0, True)
     for ch in (0, 1):
         while b.status(ch) in P.BUSY:
-            pass
+            time.sleep(0.005)
     yield b, sim
     b.close()
 

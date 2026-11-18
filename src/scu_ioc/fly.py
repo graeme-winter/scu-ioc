@@ -34,6 +34,11 @@ from .raster import Line, RasterAborted, Trigger, check_ready
 
 F_MIN, F_MAX = P.CL_FREQUENCY_RANGE
 
+# Floor on the position sampling interval. Real hardware answers about once
+# a millisecond, so this changes nothing there; it stops a fast link (or a
+# simulator) producing millions of pointless samples per move.
+MIN_SAMPLE_INTERVAL = 0.0005
+
 
 @dataclass
 class Fit:
@@ -95,7 +100,9 @@ def sample_move(b: Backend, ch: int, rot: bool, target: float, t0: float, *,
     """Command an absolute move and sample position until it completes.
     Returns (t_command, samples[(t, pos)]) with times relative to t0. Each
     sample is stamped at the midpoint of its request/reply exchange.
-    interval > 0 spaces samples at least that far apart (seconds)."""
+    Samples are at least `interval` seconds apart, and never closer than
+    MIN_SAMPLE_INTERVAL."""
+    interval = max(interval, MIN_SAMPLE_INTERVAL)
     t_cmd = time.monotonic() - t0
     b.move_abs(ch, target, 0, rot)
     samples = []
@@ -103,11 +110,10 @@ def sample_move(b: Backend, ch: int, rot: bool, target: float, t0: float, *,
     i = 0
     next_t = time.monotonic()
     while True:
-        if interval > 0:
-            wait = next_t - time.monotonic()
-            if wait > 0:
-                time.sleep(wait)
-            next_t += interval
+        wait = next_t - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        next_t = max(next_t + interval, time.monotonic())
         ta = time.monotonic()
         p = b.position(ch, rot)
         tb = time.monotonic()

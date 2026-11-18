@@ -1,3 +1,4 @@
+import time
 import csv
 
 import pytest
@@ -42,7 +43,7 @@ def stage():
         b.reference(ch, 0, True)
     for ch in (0, 1):
         while b.status(ch) in P.BUSY:
-            pass
+            time.sleep(0.005)
     yield b, sim
     b.close()
 
@@ -120,7 +121,7 @@ def test_speed_command_centres_on_zero(stage, capsys):
     b, sim = stage
     b.move_abs(0, 9000, 0, False)
     while b.status(0) in P.BUSY:
-        pass
+        time.sleep(0.005)
     port = b.port
     b.close()
     assert cli.main(["--backend", "wire", "--port", port, "speed", "A",
@@ -138,7 +139,7 @@ def test_asymmetric_slide_gets_per_direction_frequencies(tmp_path):
         b.reference(ch, 0, True)
     for ch in (0, 1):
         while b.status(ch) in P.BUSY:
-            pass
+            time.sleep(0.005)
     r = run_fly(b, Line(0, -100, 100, 20), Line(1, 0, 30, 10), frame_rate=50,
                 run_up=20, log=lambda *_: None)
     assert r.aborted is None
