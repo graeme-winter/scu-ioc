@@ -14,11 +14,13 @@ dependencies = ["softioc>=4.5", "pyserial>=3.5"]
 [project.optional-dependencies]
 dev = ["pytest", "caproto"]
 ca = ["caproto"]          # EPICS triggers for scu raster
+plot = ["matplotlib"]     # scu-flyplot
 
 [project.scripts]
 scu-ioc = "scu_ioc.ioc:main"
 scu-sim = "scu_ioc.sim:main"
 scu-wire-sim = "scu_ioc.wire_sim:main"
+scu-flyplot = "scu_ioc.flyplot:main"
 scu = "scu_ioc.cli:main"
 
 [tool.setuptools.packages.find]

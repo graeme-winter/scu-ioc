@@ -233,8 +233,11 @@ speed is set by the closed‑loop maximum step frequency (50–18,500 Hz) times
 the positioner's step length, which depends on the slide, load and
 amplitude, and it can differ between directions. So the speed is calibrated:
 the target is `--fly-speed` µm/s, or the fast STEP × `--frame-rate`. Test
-moves over the first row's span measure the speed, and the frequency is
-scaled until it's within 5%. This is done **separately for each direction**,
+moves over the first row's span measure the speed. The frequency is adjusted
+(secant steps, since speed against frequency can be lumpy on stick‑slip
+drives) until the speed is within `--calibration-tolerance` (default 1%, up
+to 8 moves). If that isn't reached, the best frequency found is used.
+This is done **separately for each direction**,
 because serpentine rows alternate, so + rows and − rows can use different
 frequencies. `--fly-freq HZ` skips calibration and uses one frequency both
 ways. The fast axis's original frequency is restored afterwards. To see how
@@ -269,6 +272,28 @@ is at constant speed over the grid. Check the run‑up still fits within
 the travel. The first grid point is reached about run‑up/speed after the
 trigger (also logged), so the detector should take frames for that long
 plus the row.
+
+**Plots.** `scu-flyplot` reads the two logs (`pip install '.[plot]'` for
+the plot; the summary works without it):
+
+```sh
+scu-flyplot run043.csv run043-traj.csv --frame-rate 100 -o run043.png
+```
+
+It plots four panels:
+- deviation from constant speed against position for every row, + and − rows
+  in different colours;
+- frame position error against frame number, along the direction of travel
+  (negative means behind). This is where a detector free‑running from the
+  row trigger actually took each frame, compared with the ideal pitch, so a
+  speed error shows up as a straight‑line drift;
+- fitted speed per row;
+- trigger‑to‑first‑grid‑point delay per row.
+
+It also prints a per‑direction summary including the drift at the end of the
+rows. A speed error of ε over N frames gives about ε × N × pitch of drift,
+so 1% over 80 frames at 50 µm is 40 µm. Tighten `--calibration-tolerance`
+if that matters.
 
 Limits: speed and smoothness are whatever the slides deliver at that
 frequency; the trajectory log shows how uniform they are. Timing is
