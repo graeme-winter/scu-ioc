@@ -125,16 +125,40 @@ def sample_move(b: Backend, ch: int, rot: bool, target: float, t0: float, *,
     return t_cmd, samples
 
 
+REACH_TOLERANCE = 10.0   # um/mdeg: a finished move further than this from its
+                         # target did not get there (end stop, stall, overload)
+
+
+def check_reached(b: Backend, ch: int, rot: bool, target: float, what: str) -> float:
+    pos = b.position(ch, rot)
+    if abs(pos - target) > REACH_TOLERANCE:
+        raise RasterAborted(f"{what}: stopped at {pos:.1f}, target {target:.1f} "
+                            "(end stop? check the range is inside the travel)")
+    return pos
+
+
+@dataclass
+class SpeedMeasurement:
+    fit: Fit | None
+    samples: int
+    interval_ms: float       # median time between samples
+
+
 def measure_speed(b: Backend, ch: int, rot: bool, a: float, z: float, freq: int,
-                  stop_event=None) -> Fit | None:
+                  stop_event=None) -> SpeedMeasurement:
     """Set the closed-loop frequency, move to a, then sample a move to z.
-    Speed is fitted over the central 60 % of the span."""
+    Speed is fitted over the central 60 % of the span. Raises RasterAborted
+    if either move fails to reach its target."""
     b.set_cl_max_frequency(ch, int(freq))
     b.move_abs(ch, a, 0, rot)
     _wait(b, [ch], 120, stop_event)
+    check_reached(b, ch, rot, a, "move to start")
     _, s = sample_move(b, ch, rot, z, time.monotonic(), stop_event=stop_event)
+    check_reached(b, ch, rot, z, f"test move at {freq} Hz")
     m = 0.2 * (z - a)
-    return fit_speed(s, a + m, z - m)
+    gaps = sorted(t1 - t0 for (t0, _), (t1, _) in zip(s, s[1:]))
+    med = gaps[len(gaps) // 2] * 1000 if gaps else float("nan")
+    return SpeedMeasurement(fit_speed(s, a + m, z - m), len(s), med)
 
 
 def calibrate_frequency(b: Backend, ch: int, rot: bool, a: float, z: float,
@@ -148,9 +172,13 @@ def calibrate_frequency(b: Backend, ch: int, rot: bool, a: float, z: float,
     ends = [(a, z), (z, a)]
     for i in range(max_iter):
         s, e = ends[i % 2]
-        fit = measure_speed(b, ch, rot, s, e, f, stop_event)
+        meas = measure_speed(b, ch, rot, s, e, f, stop_event)
+        fit = meas.fit
         if fit is None:
-            raise RasterAborted("calibration move too short to measure speed")
+            raise RasterAborted(
+                f"calibration: only {meas.samples} samples ({meas.interval_ms:.1f} ms apart) "
+                "in the move; the row is too short for this speed, or sampling is slow "
+                "(FTDI latency timer?)")
         log(f"  calibrate: {f} Hz -> {fit.speed:.1f}/s (target {target:.1f}/s, "
             f"rms {fit.rms:.2f})")
         if abs(fit.speed / target - 1) <= tol:
@@ -230,12 +258,15 @@ def run_fly(b: Backend, fast: Line, slow: Line, *, frame_rate: float | None = No
             b.move_abs(fch, start, 0, rot[fch])
             b.move_abs(sch, s, 0, rot[sch])
             _wait(b, [fch, sch], 120, stop_event)
+            check_reached(b, fch, rot[fch], start, f"row {r} start")
+            check_reached(b, sch, rot[sch], s, f"row {r} slow position")
             if settle > 0:
                 time.sleep(settle)
             t_trig = time.monotonic() - t0
             trigger.fire()
             _, samples = sample_move(b, fch, rot[fch], end, t0, stop_event=stop_event,
                                      interval=sample_interval)
+            row_end_pos = samples[-1][1]
             fit = fit_speed(samples, first, last)
             result.row_fits.append(fit)
             row_pts = fpts if r % 2 == 0 else fpts[::-1]
@@ -255,6 +286,12 @@ def run_fly(b: Backend, fast: Line, slow: Line, *, frame_rate: float | None = No
             result.rows_done += 1
             if progress:
                 progress(r, len(spts), fit, times, t_trig, time.monotonic() - t0)
+            missed = sum(t is None for t in times)
+            if abs(row_end_pos - end) > REACH_TOLERANCE or missed:
+                what = (f"{missed} grid points not reached" if missed
+                        else "all grid points crossed but the run-down was cut short")
+                raise RasterAborted(f"row {r}: stopped at {row_end_pos:.1f}, target "
+                                    f"{end:.1f}: {what} (end stop? check run-up and range)")
         return result
     except (RasterAborted, KeyboardInterrupt, P.CommandError, ConnectionLost) as e:
         for ch in (fch, sch):

@@ -160,27 +160,36 @@ def _run_fly(a, b, fast, slow) -> int:
 
 def _run_speed(a, b) -> int:
     from .fly import measure_speed
-    cfg = b.axis_config(a.channel)
+    from .raster import RasterAborted
+    ch = a.channel
+    cfg = b.axis_config(ch)
     if not cfg.sensor_present:
         print("speed needs a sensor", file=sys.stderr)
         return 1
     orig = cfg.cl_max_frequency
-    here = b.position(a.channel, cfg.rotary)
-    there = here + a.distance
-    print(f"{'ABC'[a.channel]}: moves between {here:.1f} and {there:.1f}")
-    print(f"{'freq Hz':>8} {'speed /s':>10} {'per step':>9} {'rms':>6}")
+    lo, hi = a.center - a.distance / 2, a.center + a.distance / 2
+    print(f"{'ABC'[ch]}: test moves between {lo:.1f} and {hi:.1f} "
+          f"(started at {b.position(ch, cfg.rotary):.1f})")
+    print(f"{'freq Hz':>8} {'speed /s':>10} {'per Hz':>8} {'rms':>6} {'samples':>8} {'every':>8}")
+    rc = 0
     try:
         for i, f in enumerate(a.freq):
-            s, e = (here, there) if i % 2 == 0 else (there, here)
-            fit = measure_speed(b, a.channel, cfg.rotary, s, e, f)
-            if fit is None:
-                print(f"{f:8d}  too few samples: use a longer --distance")
+            s, e = (lo, hi) if i % 2 == 0 else (hi, lo)
+            m = measure_speed(b, ch, cfg.rotary, s, e, f)
+            every = f"{m.interval_ms:.1f} ms"
+            if m.fit is None:
+                print(f"{f:8d} {'-':>10} {'-':>8} {'-':>6} {m.samples:8d} {every:>8}"
+                      "  too few samples: use a longer --distance")
             else:
-                print(f"{f:8d} {fit.speed:10.1f} {1000 * fit.speed / f:8.1f}n {fit.rms:6.2f}")
+                print(f"{f:8d} {m.fit.speed:10.1f} {1000 * m.fit.speed / f:7.1f}n "
+                      f"{m.fit.rms:6.2f} {m.samples:8d} {every:>8}")
+    except RasterAborted as e:
+        print(f"stopped: {e}", file=sys.stderr)
+        b.stop(ch)
+        rc = 3
     finally:
-        b.set_cl_max_frequency(a.channel, orig)
-        b.move_abs(a.channel, here, 0, cfg.rotary)
-    return 0
+        b.set_cl_max_frequency(ch, orig)
+    return rc
 
 
 def main(argv=None) -> int:
@@ -264,8 +273,10 @@ def main(argv=None) -> int:
     p = sub.add_parser("speed", help="measure closed-loop speed vs frequency")
     p.add_argument("channel", type=parse_channel)
     p.add_argument("--freq", type=int, nargs="+", required=True, help="frequencies to try, Hz")
-    p.add_argument("--distance", type=float, default=1000.0,
-                   help="test move length from the current position, um (default 1000)")
+    p.add_argument("--distance", type=float, default=2000.0,
+                   help="test move length, um, centred on --center (default 2000)")
+    p.add_argument("--center", type=float, default=0.0,
+                   help="centre of the test moves, um (default 0, the reference position)")
 
     p = sub.add_parser("raw", help="ascii: send one command, print the answer")
     p.add_argument("command")

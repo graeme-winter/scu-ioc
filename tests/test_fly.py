@@ -97,3 +97,32 @@ def test_fly_needs_two_points(stage):
     b, _ = stage
     with pytest.raises(ValueError):
         run_fly(b, Line(0, 5, 5, 10), Line(1, 0, 10, 10))
+
+
+def test_measure_speed_detects_end_stop(stage):
+    from scu_ioc.fly import measure_speed
+    from scu_ioc.raster import RasterAborted
+    b, _ = stage
+    with pytest.raises(RasterAborted, match="end stop"):
+        measure_speed(b, 0, False, 8000, 12000, 18500)     # sim end stop at 10500
+
+
+def test_fly_row_into_end_stop_aborts(stage):
+    b, _ = stage
+    r = run_fly(b, Line(0, 9800, 10400, 100), Line(1, 0, 0, 10), cl_freq=18500,
+                run_up=300, log=lambda *_: None)
+    assert r.aborted and "run-down was cut short" in r.aborted
+
+
+def test_speed_command_centres_on_zero(stage, capsys):
+    from scu_ioc import cli
+    b, sim = stage
+    b.move_abs(0, 9000, 0, False)
+    while b.status(0) in P.BUSY:
+        pass
+    port = b.port
+    b.close()
+    assert cli.main(["--backend", "wire", "--port", port, "speed", "A",
+                     "--freq", "18500", "--distance", "2000"]) == 0
+    out = capsys.readouterr().out
+    assert "between -1000.0 and 1000.0" in out and "1850.0" in out
