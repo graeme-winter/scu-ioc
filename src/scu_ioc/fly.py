@@ -284,7 +284,7 @@ def run_fly(b: Backend, fast: Line, slow: Line, *, frame_rate: float | None = No
     tw = csv.writer(tf) if tf else None
     if pw:
         pw.writerow(["index", "row", "col", "fast_target", "slow_target", "t_trigger",
-                     "t_cross", "dt_cross", "row_speed", "row_rms"])
+                     "t_cross", "dt_cross", "row_speed", "row_rms", "slow_pos"])
     if tw:
         tw.writerow(["row", "t", "fast_pos"])
     index = 0
@@ -303,7 +303,7 @@ def run_fly(b: Backend, fast: Line, slow: Line, *, frame_rate: float | None = No
             b.move_abs(sch, s, 0, rot[sch])
             _wait(b, [fch, sch], 120, stop_event)
             check_reached(b, fch, rot[fch], start, f"row {r} start")
-            check_reached(b, sch, rot[sch], s, f"row {r} slow position")
+            slow_pos = check_reached(b, sch, rot[sch], s, f"row {r} slow position")
             d = 1 if end > start else -1
             f = int(result.frequencies[d])
             if f != current_freq:
@@ -331,7 +331,8 @@ def run_fly(b: Backend, fast: Line, slow: Line, *, frame_rate: float | None = No
                                  "" if tc is None else f"{tc:.5f}",
                                  "" if tc is None else f"{tc - t_trig:.5f}",
                                  "" if fit is None else f"{fit.speed:.2f}",
-                                 "" if fit is None else f"{fit.rms:.2f}"])
+                                 "" if fit is None else f"{fit.rms:.2f}",
+                                 f"{slow_pos:.1f}"])
                     index += 1
             result.rows_done += 1
             if progress:

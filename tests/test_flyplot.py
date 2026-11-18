@@ -15,7 +15,7 @@ def _write_scan(tmp_path, speeds, step=50.0, first=-200.0, last=200.0, delay=0.1
     with open(log, "w", newline="") as lf, open(traj, "w", newline="") as tf:
         lw, tw = csv.writer(lf), csv.writer(tf)
         lw.writerow(["index", "row", "col", "fast_target", "slow_target", "t_trigger",
-                     "t_cross", "dt_cross", "row_speed", "row_rms"])
+                     "t_cross", "dt_cross", "row_speed", "row_rms", "slow_pos"])
         tw.writerow(["row", "t", "fast_pos"])
         idx = 0
         for r in range(4):
@@ -30,8 +30,8 @@ def _write_scan(tmp_path, speeds, step=50.0, first=-200.0, last=200.0, delay=0.1
                 tw.writerow([r, f"{t_trig + tt:.5f}", f"{x_start + d * v * tt:.3f}"])
             for c, x in enumerate(pts):
                 tc = t_trig + abs(x - x_start) / v
-                lw.writerow([idx, r, c, x, 0, f"{t_trig:.5f}", f"{tc:.5f}",
-                             f"{tc - t_trig:.5f}", v, 0])
+                lw.writerow([idx, r, c, x, 100 * r, f"{t_trig:.5f}", f"{tc:.5f}",
+                             f"{tc - t_trig:.5f}", v, 0, f"{100 * r + 0.3:.1f}"])
                 idx += 1
             t = t_trig + dur + 1.0
     return str(log), str(traj)
@@ -75,3 +75,40 @@ def test_cli_writes_plot(tmp_path):
     assert main([log, traj, "--frame-rate", "50", "-o", str(out)]) == 0
     assert out.stat().st_size > 10000
     assert main([log, traj, "--no-plot"]) == 0
+
+
+def test_frames_table_and_map(tmp_path):
+    log, traj = _write_scan(tmp_path, (2500.0, 2475.0))
+    frames = tmp_path / "frames.csv"
+    out = tmp_path / "map.png"
+    assert main([log, traj, "--frame-rate", "50", "--no-plot",
+                 "--frames-out", str(frames)] +
+                (["--map", str(out)] if _have_mpl() else [])) == 0
+    rows = list(csv.DictReader(open(frames)))
+    # measured slow position from the log, not the target
+    assert {float(r["slow_pos"]) for r in rows if r["row"] == "2"} == {200.3}
+    grid = [r for r in rows if r["row"] == "1" and r["grid_frame"]]
+    assert [int(r["grid_frame"]) for r in grid] == list(range(len(grid)))
+    assert len(grid) == 9                       # -200..200 at 50 um
+    last = grid[-1]                             # - row, 1 % slow: 0.5 um/frame behind
+    assert float(last["error_along"]) == pytest.approx(-0.5 * 8, abs=0.3)
+    assert float(last["nominal_fast"]) == pytest.approx(
+        float(grid[0]["fast_pos"]) - 50 * 8, abs=0.01)
+    # frames in the run-up have positions but no grid error
+    pre = [r for r in rows if r["row"] == "1" and not r["grid_frame"]]
+    assert pre and all(r["error_along"] == "" for r in pre)
+    if _have_mpl():
+        assert out.stat().st_size > 10000
+
+
+def test_frames_out_needs_frame_rate(tmp_path):
+    log, traj = _write_scan(tmp_path, (2500.0, 2500.0))
+    assert main([log, traj, "--no-plot", "--frames-out", str(tmp_path / "f.csv")]) == 1
+
+
+def _have_mpl():
+    try:
+        import matplotlib  # noqa: F401
+        return True
+    except ImportError:
+        return False

@@ -291,7 +291,29 @@ It plots four panels:
 - trigger‑to‑first‑grid‑point delay per row.
 
 It also prints a per‑direction summary including the drift at the end of the
-rows. A speed error of ε over N frames gives about ε × N × pitch of drift,
+rows.
+
+Two more outputs show where the sample went:
+
+```sh
+scu-flyplot run043.csv run043-traj.csv --frame-rate 100 --map run043-map.png --frames-out run043-frames.csv
+```
+
+- `--map` draws two panels: the stage's actual path over the whole scan,
+  and every detector frame at its actual position, coloured by its error along
+  the direction of travel. The colour scale covers 99.5% of frames, so a single
+  bad row saturates instead of washing out the rest. Patterns tied to the
+  slide show as vertical stripes, drift over the scan as a change down the
+  map, and a one‑off disturbance as a single streak.
+- `--frames-out` writes one line per detector frame, assuming it free‑runs from
+  each row trigger at `--frame-rate`. Each line has the row, frame number,
+  time, actual fast and slow positions, and, for frames inside the grid, the
+  nominal position and the error. This is the frame‑to‑position table for
+  data processing. Frames before the first position sample of a row (the
+  first few ms of run‑up) are omitted.
+
+The slow‑axis position in these comes from the measured position logged at
+the start of each row (older logs fall back to the target). A speed error of ε over N frames gives about ε × N × pitch of drift,
 so 1% over 80 frames at 50 µm is 40 µm. Tighten `--calibration-tolerance`
 if that matters.
 
