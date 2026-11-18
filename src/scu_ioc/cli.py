@@ -2,6 +2,7 @@
 
     scu status
     scu --lib /opt/smaract/lib/libscu3dcontrol.so status
+    scu --backend wire --port /dev/ttyUSB0 status       # stock firmware, no SDK
     scu --backend ascii --port /dev/ttyUSB0 rel A 25
     scu ... step B -500 --amp 60 --freq 1000
     scu ... reference A --auto-zero
@@ -61,10 +62,11 @@ def describe(b: Backend, ch: int) -> str:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="SmarAct SCU bench tool")
-    ap.add_argument("--backend", choices=["sdk", "dll", "ascii"], default="sdk",
-                    help="sdk (alias dll): SmarAct SCU library; ascii: serial")
-    ap.add_argument("--port", help="ascii: serial device or pyserial URL")
-    ap.add_argument("--baud", type=int, default=9600)
+    ap.add_argument("--backend", choices=["sdk", "dll", "wire", "ascii"], default="sdk",
+                    help="sdk (alias dll): SmarAct SCU library; wire: stock firmware "
+                         "over its serial port, no SDK; ascii: ASCII firmware / RS-232")
+    ap.add_argument("--port", help="wire/ascii: serial device or pyserial URL")
+    ap.add_argument("--baud", type=int, help="default 500000 (wire), 9600 (ascii)")
     ap.add_argument("--device-id", type=int)
     ap.add_argument("--lib", "--dll", dest="dll",
                     help="sdk: path to SCU3DControl.dll / libscu3dcontrol.so")
@@ -112,12 +114,16 @@ def main(argv=None) -> int:
             return 0
         b = DllBackend(a.device_id, a.dll)
     else:
-        from .ascii import AsciiBackend
         if not a.port:
-            ap.error("--port is required for the ascii backend")
+            ap.error(f"--port is required for the {a.backend} backend")
         if a.cmd == "list":
             ap.error("list is only available with the sdk backend")
-        b = AsciiBackend(a.port, a.baud)
+        if a.backend == "wire":
+            from .wire_backend import WireBackend
+            b = WireBackend(a.port, a.baud or 500000, device_id=a.device_id)
+        else:
+            from .ascii import AsciiBackend
+            b = AsciiBackend(a.port, a.baud or 9600)
 
     try:
         info = b.connect()

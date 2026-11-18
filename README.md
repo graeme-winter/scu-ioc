@@ -12,6 +12,7 @@ There are two ways to talk to an SCU, selected with `--backend`:
 | Backend | Hardware | Host |
 | --- | --- | --- |
 | `sdk` (default; `dll` is an alias) | USB SCUs with the stock firmware (e.g. CU-3D-USB-OEM as shipped) | Windows (SCU3DControl.dll) or Linux x86/x86-64 (libscu3dcontrol.so); both use FTDI's D2XX driver |
+| `wire` | the same stock-firmware USB SCUs, without the SDK: speaks the firmware's binary protocol over its FTDI serial port | anything with pyserial and an FTDI driver, e.g. a Raspberry Pi |
 | `ascii` | RS-232 SCUs, or USB SCUs reflashed with SmarAct's ASCII firmware (they then appear as an FTDI virtual COM port) | anything with pyserial, including `socket://` device servers |
 
 The stock USB firmware does not answer ASCII commands. The SCU user manual
@@ -31,12 +32,11 @@ Layout:
 | `ioc.py` | pythonSoftIOC records and worker thread; `scu-ioc` entry point |
 | `cli.py` | `scu` bench tool over either backend |
 | `wire.py` | SCU binary protocol map (stock USB firmware), reconstructed; see `docs/wire-protocol.md` |
+| `wire_backend.py` | `wire` backend: the binary protocol over pyserial |
 | `wire_sim.py` | Binary‑protocol simulator; `scu-wire-sim` serves it on a pty |
 
 `tools/ftrace/` has the capture shim, trace decoder and capture session
-used to check the binary protocol map against real hardware. There is no
-backend for the binary protocol yet; that's the route to running on a
-Raspberry Pi without SmarAct's x86‑only SDK.
+used to check the binary protocol map against real hardware.
 
 ## Install and run
 
@@ -104,6 +104,43 @@ replug. `scu list` should show the device ID.
 `/dev/bus/usb` (or the specific bus/device node), put the SDK libraries in
 the image, and give the IOC `--lib`. A device attached over USB/IP is
 handled the same way on the host that imports it.
+
+### Raspberry Pi, or any host without the SDK (`wire` backend)
+
+The `wire` backend talks to a stock-firmware USB SCU through the kernel's
+`ftdi_sio` driver, as an ordinary serial port at 500000 baud. So here,
+unlike with the SDK, `ftdi_sio` should **keep** the device. Two settings
+matter:
+
+- **Latency timer.** FTDI's default is 16 ms, which makes every exchange
+  take ~16 ms. The SDK sets 1 ms, at which the firmware answers in about
+  0.5 ms. The IOC logs a warning if it finds 16.
+- **A stable name.** `/dev/serial/by-id/usb-SmarAct_SCU-3D_<serial>-if00-port0`
+  already exists; the rule below also adds `/dev/smaract-scu`.
+
+Find the serial with `udevadm info -a -n /dev/ttyUSB0 | grep 'ATTRS{serial}'`,
+then create `/etc/udev/rules.d/99-smaract-scu-wire.rules`:
+
+```
+# SmarAct SCU via ftdi_sio: stable name, dialout access, 1 ms latency
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", ATTRS{serial}=="<SERIAL>", SYMLINK+="smaract-scu", GROUP="dialout", MODE="0660"
+ACTION=="add", SUBSYSTEM=="usb-serial", DRIVER=="ftdi_sio", ATTRS{serial}=="<SERIAL>", ATTR{latency_timer}="1"
+```
+
+Reload with `sudo udevadm control --reload && sudo udevadm trigger`, then
+replug. Then:
+
+```sh
+scu --backend wire --port /dev/smaract-scu status
+scu-ioc --backend wire --port /dev/smaract-scu --prefix 24IDC:SCU:
+```
+
+`--device-id 654905362` makes the IOC refuse any other controller on that
+port. `--port` also accepts pyserial URLs, so a serial server (e.g. ser2net
+on a USB/IP box) works if it runs the port raw at 500000 8N1, with the latency
+timer set to 1 ms on that host. In a container, pass the tty with `--device`.
+
+Don't use the SDK udev rule (which unbinds `ftdi_sio`) on the same host.
 
 ### Serial (RS-232 or ASCII firmware)
 
@@ -227,9 +264,14 @@ check that missing symbols are bound as "not supported".
 
 ## Known gaps
 
-- **SDK backend:** it has run against hardware on Windows (DLL). On Linux,
-  only loading libscu3dcontrol.so 1.5.16 and its no-device error path have
-  been exercised, not real hardware. Argument order and units follow the header
+- **SDK backend:** it has run against hardware on Windows (DLL) and on
+  Linux (libscu3dcontrol.so 1.5.16, CU-3D with firmware 5.1.192).
+- **Wire backend:** the protocol is reverse engineered (see
+  `docs/wire-protocol.md`). It's checked three ways: against SmarAct's library,
+  replayed against exchanges captured from a CU-3D with firmware 5.1.192,
+  and against the simulator. It has **not yet driven real hardware**. Other
+  firmware versions or models may differ. Asynchronous mode, scale,
+  alignment and the EEPROM/SRAM commands are deliberately not implemented. Argument order and units follow the header
   and Programmer's Guide; the ctypes binding assumes cdecl (the header
   declares no calling convention, which is moot on x64).
 - **ASCII backend has only been tested against the simulator.** In

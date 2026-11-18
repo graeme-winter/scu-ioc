@@ -515,11 +515,15 @@ def parse_axes(spec: str) -> dict:
 
 
 def make_backend(a) -> Backend:
+    if a.backend in ("ascii", "wire") and not a.port:
+        raise SystemExit(f"--port is required for the {a.backend} backend")
     if a.backend == "ascii":
         from .ascii import AsciiBackend
-        if not a.port:
-            raise SystemExit("--port is required for the ascii backend")
-        return AsciiBackend(a.port, a.baud, a.timeout)
+        return AsciiBackend(a.port, a.baud or 9600, a.timeout)
+    if a.backend == "wire":
+        from .wire_backend import WireBackend
+        from . import wire
+        return WireBackend(a.port, a.baud or wire.BAUD, a.timeout, device_id=a.device_id)
     from .dll import DllBackend
     return DllBackend(device_id=a.device_id, dll_path=a.dll)
 
@@ -528,13 +532,18 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="EPICS soft IOC for SmarAct SCU controllers")
     ap.add_argument("--prefix", required=True,
                     help="PV prefix, used verbatim (include any trailing ':')")
-    ap.add_argument("--backend", choices=["sdk", "dll", "ascii"], default="sdk",
+    ap.add_argument("--backend", choices=["sdk", "dll", "wire", "ascii"], default="sdk",
                     help="sdk (alias dll): stock USB firmware via SmarAct's SCU library, "
                          "SCU3DControl.dll or libscu3dcontrol.so; "
+                         "wire: stock USB firmware directly over its FTDI serial port "
+                         "(no SDK; e.g. Raspberry Pi); "
                          "ascii: RS-232 or ASCII-firmware USB via serial port")
-    ap.add_argument("--port", help="ascii: serial device or pyserial URL (socket://host:port)")
-    ap.add_argument("--baud", type=int, default=9600, help="ascii: baud rate (default 9600)")
-    ap.add_argument("--device-id", type=int, help="sdk: SCU device ID (default: first found)")
+    ap.add_argument("--port", help="wire/ascii: serial device or pyserial URL (socket://host:port)")
+    ap.add_argument("--baud", type=int,
+                    help="wire/ascii: baud rate (default 500000 wire, 9600 ascii)")
+    ap.add_argument("--device-id", type=int,
+                    help="sdk: SCU device ID to open (default: first found); "
+                         "wire: refuse to connect unless the device has this ID")
     ap.add_argument("--lib", "--dll", dest="dll",
                     help="sdk: path to SCU3DControl.dll / libscu3dcontrol.so "
                          "(default: $SCU_DLL, else the library search path)")
@@ -543,7 +552,7 @@ def main(argv=None):
     ap.add_argument("--poll", type=float, default=1.0, help="idle poll period, s (default 1)")
     ap.add_argument("--busy-poll", type=float, default=0.1,
                     help="poll period while moving, s (default 0.1)")
-    ap.add_argument("--timeout", type=float, default=1.0, help="ascii: reply timeout, s")
+    ap.add_argument("--timeout", type=float, default=1.0, help="wire/ascii: reply timeout, s")
     ap.add_argument("--no-shell", action="store_true", help="no interactive Python shell")
     ap.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     a = ap.parse_args(argv)

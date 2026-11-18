@@ -16,18 +16,20 @@ ENV = dict(os.environ, EPICS_CA_AUTO_ADDR_LIST="NO", EPICS_CA_ADDR_LIST="127.0.0
            EPICS_CAS_INTF_ADDR_LIST="127.0.0.1")
 
 
-@pytest.fixture(scope="module")
-def ioc(tmp_path_factory):
+@pytest.fixture(scope="module", params=["ascii", "wire"])
+def ioc(request, tmp_path_factory):
+    backend = request.param
     link = str(tmp_path_factory.mktemp("scu") / "pty")
     prefix = f"T{uuid.uuid4().hex[:6].upper()}:SCU:"
-    sim = subprocess.Popen([sys.executable, "-m", "scu_ioc.sim", "--link", link,
+    simmod = "scu_ioc.sim" if backend == "ascii" else "scu_ioc.wire_sim"
+    sim = subprocess.Popen([sys.executable, "-m", simmod, "--link", link,
                             "--sensors", "21,19,0"], env=ENV,
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     for _ in range(50):
         if os.path.exists(link):
             break
         time.sleep(0.1)
-    ioc = subprocess.Popen([sys.executable, "-m", "scu_ioc.ioc", "--backend", "ascii",
+    ioc = subprocess.Popen([sys.executable, "-m", "scu_ioc.ioc", "--backend", backend,
                             "--port", link, "--prefix", prefix, "--no-shell"], env=ENV,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for k, v in ENV.items():
@@ -82,7 +84,7 @@ def ioc(tmp_path_factory):
 
 
 def test_identity(ioc):
-    assert ioc.get("MODEL") == "SmarAct CU-3D"
+    assert ioc.get("MODEL") in ("SmarAct CU-3D", "SmarAct SCU-3D (USB)")
     assert ioc.get("DEVICE_ID") == "604573714"
     assert ioc.get("A:SENSOR_NAME") == "L"
     assert ioc.get("B:SENSOR_NAME") == "LR"
