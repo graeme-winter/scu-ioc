@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scu-ioc"
-version = "0.1.0"
-description = "EPICS soft IOC for SmarAct SCU (CU/HCU-1D/3D) piezo controllers"
+version = "0.2.0"
+description = "EPICS soft IOC, bench tool and raster/fly scans for SmarAct SCU (CU/HCU-1D/3D) piezo controllers"
 readme = "README.md"
 requires-python = ">=3.9"
 authors = [{ name = "Graeme Winter", email = "graeme.winter@gmail.com" }]

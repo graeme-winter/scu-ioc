@@ -1,4 +1,4 @@
-"""Common interface for the two ways of talking to an SCU.
+"""Common interface for the ways of talking to an SCU (wire, sdk, ascii).
 
 Backends are blocking and not thread safe; callers (the IOC, the CLI)
 serialise access. Units are those listed in protocol.py.

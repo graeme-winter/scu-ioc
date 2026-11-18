@@ -1,4 +1,4 @@
-"""`scu`: small command-line tool for bench work, over either backend.
+"""`scu`: command-line tool for bench work and scans, over any backend.
 
     scu status
     scu --lib /opt/smaract/lib/libscu3dcontrol.so status
@@ -6,6 +6,8 @@
     scu --backend ascii --port /dev/ttyUSB0 rel A 25
     scu ... step B -500 --amp 60 --freq 1000
     scu ... reference A --auto-zero
+    scu ... speed A --freq 1000 2000 5000 --distance 4000
+    scu ... raster --fast A -2000 2000 50 --slow B -2000 2000 50 [--fly --frame-rate 50]
     scu list
     scu --backend ascii --port /dev/ttyUSB0 raw GP0
 
@@ -219,7 +221,7 @@ def main(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("list", help="sdk: list connected SCU device IDs")
-    sub.add_parser("status")
+    sub.add_parser("status", help="controller and per-axis summary")
     for name, helptext in (("move", "closed-loop absolute (um / mdeg)"),
                            ("rel", "closed-loop relative (um / mdeg)")):
         p = sub.add_parser(name, help=helptext)
@@ -241,7 +243,7 @@ def main(argv=None) -> int:
     p = sub.add_parser("sensor-type", help="set sensor type code (stored in NV memory)")
     p.add_argument("channel", type=parse_channel)
     p.add_argument("code", type=int)
-    p = sub.add_parser("stop")
+    p = sub.add_parser("stop", help="stop one axis, or all")
     p.add_argument("channel", type=parse_channel, nargs="?")
     p = sub.add_parser("raster", help="serpentine step-and-shoot raster (see --help)",
                        description="Serpentine step-and-shoot raster. At each point: "

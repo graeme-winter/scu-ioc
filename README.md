@@ -1,124 +1,90 @@
 # scu-ioc
 
-EPICS soft IOC for SmarAct SCU piezo controllers (CU-1D/3D and HCU-1D/3D,
-with or without sensor module), written against SmarAct's *SCU ASCII
-Programming Interface* v2.0-C and *SCU Programmer's Guide* v2.0-C
-(SCU3DControl 1.4.x on Windows, libscu3dcontrol 1.5.16 on Linux). Pure Python:
-[pythonSoftIOC](https://github.com/DiamondLightSource/pythonSoftIOC), plus
-pyserial. No EPICS build, no motor module.
+Python control for SmarAct SCU piezo controllers (CU‑1D/3D and HCU‑1D/3D,
+with or without the sensor module):
 
-There are two ways to talk to an SCU, selected with `--backend`:
+- **`scu-ioc`**: an EPICS soft IOC with motor‑record‑like PVs per axis
+  ([pythonSoftIOC](https://github.com/DiamondLightSource/pythonSoftIOC); no
+  EPICS build, no motor module).
+- **`scu`**: a bench tool for status, moves, referencing and speed
+  measurement, plus serpentine **raster** and **fly** scans for a two‑axis
+  fixed‑target stage.
+- **`scu-flyplot`**: analysis, plots, a sample map and a frame‑to‑position
+  table for fly scans.
 
-| Backend | Hardware | Host |
+It is written against SmarAct's *SCU ASCII Programming Interface* v2.0‑C and
+*SCU Programmer's Guide* v2.0‑C (SCU3DControl 1.4.x on Windows,
+libscu3dcontrol 1.5.16 on Linux), plus a reverse‑engineered map of the stock
+USB firmware's binary protocol (`docs/wire-protocol.md`). It has been run
+against a CU‑3D (USB OEM board, firmware 5.1.192) with two SLC‑1740 linear
+slides.
+
+## Backends
+
+Choose one with `--backend` (the IOC and `scu` both take it):
+
+| Backend | Controllers | Hosts |
 | --- | --- | --- |
-| `sdk` (default; `dll` is an alias) | USB SCUs with the stock firmware (e.g. CU-3D-USB-OEM as shipped) | Windows (SCU3DControl.dll) or Linux x86/x86-64 (libscu3dcontrol.so); both use FTDI's D2XX driver |
-| `wire` | the same stock-firmware USB SCUs, without the SDK: speaks the firmware's binary protocol over its FTDI serial port | anything with pyserial and an FTDI driver, e.g. a Raspberry Pi |
-| `ascii` | RS-232 SCUs, or USB SCUs reflashed with SmarAct's ASCII firmware (they then appear as an FTDI virtual COM port) | anything with pyserial, including `socket://` device servers |
+| `wire` | USB SCUs with the stock firmware (e.g. CU‑3D‑USB‑OEM as shipped) | anything with pyserial and an FTDI serial driver: Linux x86 or ARM (Raspberry Pi), macOS |
+| `sdk` (default; alias `dll`) | the same stock‑firmware USB SCUs, through SmarAct's library | Windows (SCU3DControl.dll) or Linux x86/x86‑64 (libscu3dcontrol.so) |
+| `ascii` | RS‑232 SCUs, or USB SCUs reflashed with SmarAct's ASCII firmware | anything with pyserial, including `socket://` serial servers |
 
-The stock USB firmware does not answer ASCII commands. The SCU user manual
-says an ASCII firmware is available for the USB versions on request from
-SmarAct, and the SCU software package includes the Firmware Uploader. That
-is the route to running this on Linux or in a container.
+**Which to use:**
+- On Linux, a Raspberry Pi or a Mac, use **`wire`**. It needs no SmarAct
+  software, uses the kernel's standard FTDI driver, and works in containers
+  like any other serial device.
+- On Windows, use **`sdk`**.
+- `ascii` is for RS‑232 units, or units already running the ASCII firmware.
 
-Layout:
+The `wire` protocol was reconstructed from SmarAct's library. It's
+checked against that library, replayed against captured hardware exchanges,
+and has driven the hardware. See [Known gaps](#known-gaps) for what that
+does and doesn't cover.
 
-| Module | Role |
-| --- | --- |
-| `protocol.py` | Status codes, sensor types, error texts; ASCII framing and parsing |
-| `backend.py` | Backend interface (blocking, um / mdeg / 1/10 V / Hz units) |
-| `ascii.py` | ASCII serial backend |
-| `dll.py` | SDK backend: ctypes binding of SCU3DControl.dll / libscu3dcontrol.so |
-| `sim.py` | ASCII-protocol simulator; `scu-sim` serves it on a pty |
-| `ioc.py` | pythonSoftIOC records and worker thread; `scu-ioc` entry point |
-| `cli.py` | `scu` bench tool over either backend |
-| `wire.py` | SCU binary protocol map (stock USB firmware), reconstructed; see `docs/wire-protocol.md` |
-| `wire_backend.py` | `wire` backend: the binary protocol over pyserial |
-| `wire_sim.py` | Binary‑protocol simulator; `scu-wire-sim` serves it on a pty |
+## Install
 
-`tools/ftrace/` has the capture shim, trace decoder and capture session
-used to check the binary protocol map against real hardware.
-
-## Install and run
+Python 3.10 or newer is recommended (3.9 works, but its dependencies are
+ageing out). On a Mac, use uv, Homebrew or python.org Python rather than
+Apple's 3.9.
 
 ```sh
-python -m venv .venv && . .venv/bin/activate     # Windows: .venv\Scripts\activate
-pip install .                                     # or: pip install -e '.[dev]' && pytest
+python3 -m venv .venv && . .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install --upgrade pip
+pip install '.[plot]'                              # or: pip install -e '.[dev,plot]'
+
+# or with uv, which also fetches a suitable Python:
+uv venv --python 3.12 .venv && . .venv/bin/activate && uv pip install -e '.[dev,plot]'
 ```
 
-### Windows, stock USB firmware
+Optional extras:
 
-Install the SmarAct SCU software (it installs the FTDI USB driver and
-FTD2XX.dll), close the SCU Configuration Tool, then:
+| Extra | Adds | For |
+| --- | --- | --- |
+| `plot` | matplotlib | `scu-flyplot` plots and maps |
+| `ca` | caproto | `ca:` triggers in `scu raster` |
+| `dev` | pytest, caproto | the test suite |
 
-```bat
-set SCU_DLL=C:\path\to\SCU\SDK\lib64\SCU3DControl.dll
-scu-ioc --prefix 24IDC:SCU: --device-id 604573714
-```
+Old pip (before 21.3) cannot do editable installs of a `pyproject.toml`‑only
+project. Upgrade pip first.
 
-Use `SDK\lib64` with 64-bit Python and `SDK\lib` with 32-bit. `--lib`
-(alias `--dll`) does the same as `SCU_DLL`. `--device-id` is optional with one controller
-attached; `scu list` shows what is connected. Allow Python through the
-Windows firewall for Channel Access (UDP/TCP 5064, UDP 5065).
+## Host setup
 
-### Linux, stock USB firmware
+Only one program can use a controller at a time. Close the IOC, the SmarAct
+tools and any `scu` command before starting another.
 
-The Linux SDK (1.5.16) has the same C API as the Windows DLL; only x86 and
-x86-64 builds are supplied, so no ARM. Copy
-`SDK/Redistributables/x86_64/` somewhere sensible, e.g. `/opt/smaract/lib`,
-and point the IOC at it:
+### Linux and Raspberry Pi (`wire`)
 
-```sh
-scu list --lib /opt/smaract/lib/libscu3dcontrol.so
-scu-ioc --lib /opt/smaract/lib/libscu3dcontrol.so --prefix 24IDC:SCU:
-```
+The SCU appears through `ftdi_sio` as `/dev/ttyUSB*`, at 500,000 baud. Two
+settings matter:
 
-libscu3dcontrol.so needs libftd2xx.so but carries no RPATH. The backend
-preloads libftd2xx.so from the same directory, so LD_LIBRARY_PATH is not
-needed when they sit together (as in Redistributables).
-
-Two host settings matter, because D2XX talks to the device through usbfs
-rather than a tty:
-
-1. **The kernel's `ftdi_sio` driver must not hold the SCU.** If it does,
-   the SCU appears as `/dev/ttyUSB*` and the SDK reports an initialisation
-   error. `sudo rmmod ftdi_sio` is fine for a quick test, but it
-   detaches every FTDI serial adapter on the host.
-2. **The IOC user needs write access** to the device node under
-   `/dev/bus/usb`.
-
-A udev rule handles both for just this device. Find its IDs with `lsusb`
-and `udevadm info -a -n /dev/ttyUSB0` (while ftdi_sio still has it). The
-SDK doesn't set a custom VID/PID, so expect FTDI's 0403:6001. Then create
-`/etc/udev/rules.d/99-smaract-scu.rules`:
-
-```
-# SmarAct SCU: usable via libftd2xx by group plugdev, with ftdi_sio detached
-SUBSYSTEM=="usb", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", ATTRS{serial}=="<SERIAL>", MODE="0660", GROUP="plugdev"
-ACTION=="add", SUBSYSTEM=="usb", DRIVER=="ftdi_sio", ATTRS{serial}=="<SERIAL>", RUN+="/bin/sh -c 'echo %k > /sys/bus/usb/drivers/ftdi_sio/unbind'"
-```
-
-Reload with `sudo udevadm control --reload && sudo udevadm trigger`, then
-replug. `scu list` should show the device ID.
-
-**In a container:** keep the udev rule on the host. In the container, pass
-`/dev/bus/usb` (or the specific bus/device node), put the SDK libraries in
-the image, and give the IOC `--lib`. A device attached over USB/IP is
-handled the same way on the host that imports it.
-
-### Raspberry Pi, or any host without the SDK (`wire` backend)
-
-The `wire` backend talks to a stock-firmware USB SCU through the kernel's
-`ftdi_sio` driver, as an ordinary serial port at 500000 baud. So here,
-unlike with the SDK, `ftdi_sio` should **keep** the device. Two settings
-matter:
-
-- **Latency timer.** FTDI's default is 16 ms, which makes every exchange
-  take ~16 ms. The SDK sets 1 ms, at which the firmware answers in about
-  0.5 ms. The IOC logs a warning if it finds 16.
+- **The FTDI latency timer.** The default is 16 ms, which makes every exchange
+  take about 16 ms. At 1 ms (what the SDK sets) the firmware answers in about
+  0.5 ms. This matters most for fly scans. The IOC and `scu` warn if they find
+  16.
 - **A stable name.** `/dev/serial/by-id/usb-SmarAct_SCU-3D_<serial>-if00-port0`
-  already exists; the rule below also adds `/dev/smaract-scu`.
+  exists already; the rule below also adds `/dev/smaract-scu`.
 
-Find the serial with `udevadm info -a -n /dev/ttyUSB0 | grep 'ATTRS{serial}'`,
+Find the serial number with `udevadm info -a -n /dev/ttyUSB0 | grep 'ATTRS{serial}'`,
 then create `/etc/udev/rules.d/99-smaract-scu-wire.rules`:
 
 ```
@@ -127,205 +93,315 @@ SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", ATTRS{seria
 ACTION=="add", SUBSYSTEM=="usb-serial", DRIVER=="ftdi_sio", ATTRS{serial}=="<SERIAL>", ATTR{latency_timer}="1"
 ```
 
-Reload with `sudo udevadm control --reload && sudo udevadm trigger`, then
-replug. Then:
+Reload with `sudo udevadm control --reload && sudo udevadm trigger` and
+replug. For a quick test without the rule, run
+`echo 1 | sudo tee /sys/bus/usb-serial/devices/ttyUSB0/latency_timer`. Then:
 
 ```sh
 scu --backend wire --port /dev/smaract-scu status
-scu-ioc --backend wire --port /dev/smaract-scu --prefix 24IDC:SCU:
+scu-ioc --backend wire --port /dev/smaract-scu --device-id 654905362 --prefix 24IDC:SCU:
 ```
 
-`--device-id 654905362` makes the IOC refuse any other controller on that
-port. `--port` also accepts pyserial URLs, so a serial server (e.g. ser2net
-on a USB/IP box) works if it runs the port raw at 500000 8N1, with the latency
-timer set to 1 ms on that host. In a container, pass the tty with `--device`.
+- `--device-id` makes the IOC refuse any other controller on that port.
+- `--port` also takes pyserial URLs (`socket://`, `rfc2217://`), so a serial
+  server, such as ser2net on a USB/IP box, works. It must run the port raw at
+  500000 8N1, with the latency timer at 1 ms on that host.
+- In a container, pass the tty with `--device`.
 
-Don't use the SDK udev rule (which unbinds `ftdi_sio`) on the same host.
+Don't install the SDK rule below on the same host: it detaches `ftdi_sio`.
 
-### Serial (RS-232 or ASCII firmware)
+### macOS (`wire`)
+
+macOS's built‑in FTDI driver presents the SCU as `/dev/cu.usbserial-<serial>`.
+Use the `cu.` device, not `tty.`.
+
+```sh
+scu --backend wire --port /dev/cu.usbserial-FT0CO27S status
+```
+
+The latency timer can't easily be changed there and stays at 16 ms. Control,
+the IOC, raster scans and fly calibration all work. Fly‑scan trajectories are
+sampled every 16 ms instead of about every 1 ms, which is coarse for judging
+how smooth the motion is. Use Linux for that.
+
+### Windows (`sdk`)
+
+Install the SmarAct SCU software (it installs the FTDI driver and
+FTD2XX.dll), close the SCU Configuration Tool, then:
+
+```bat
+set SCU_DLL=C:\path\to\SCU\SDK\lib64\SCU3DControl.dll
+scu-ioc --prefix 24IDC:SCU: --device-id 604573714
+```
+
+- Use `SDK\lib64` with 64‑bit Python and `SDK\lib` with 32‑bit.
+- `--lib` (alias `--dll`) does the same job as `SCU_DLL`.
+- `scu list` shows the connected device IDs.
+- Allow Python through the Windows firewall for Channel Access (UDP/TCP 5064,
+  UDP 5065).
+
+### Linux with SmarAct's library (`sdk`)
+
+The Linux SDK (1.5.16) has the same C API as the Windows DLL. It's x86 and
+x86‑64 only. Copy `SDK/Redistributables/x86_64/` to, say,
+`/opt/smaract/lib`:
+
+```sh
+scu list --lib /opt/smaract/lib/libscu3dcontrol.so
+scu-ioc --lib /opt/smaract/lib/libscu3dcontrol.so --prefix 24IDC:SCU:
+```
+
+libscu3dcontrol.so needs libftd2xx.so but carries no RPATH. The backend
+preloads libftd2xx.so from the same directory, so `LD_LIBRARY_PATH` isn't
+needed when the two sit together.
+
+D2XX talks to the device through usbfs, so `ftdi_sio` must **not** hold the
+SCU, and the IOC user needs access to its `/dev/bus/usb` node. The SDK uses
+FTDI's standard 0403:6001. Create `/etc/udev/rules.d/99-smaract-scu.rules`:
+
+```
+# SmarAct SCU: usable via libftd2xx by group plugdev, with ftdi_sio detached
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", ATTRS{serial}=="<SERIAL>", MODE="0660", GROUP="plugdev"
+ACTION=="add", SUBSYSTEM=="usb", DRIVER=="ftdi_sio", ATTRS{serial}=="<SERIAL>", RUN+="/bin/sh -c 'echo %k > /sys/bus/usb/drivers/ftdi_sio/unbind'"
+```
+
+In a container, keep the rule on the host, pass `/dev/bus/usb`, and put the
+SDK libraries in the image.
+
+### RS‑232 or ASCII firmware (`ascii`)
 
 ```sh
 scu-ioc --backend ascii --port /dev/serial/by-id/usb-FTDI_...-if00-port0 --prefix 24IDC:SCU:
 scu-ioc --backend ascii --port socket://moxa1:4001 --prefix 24IDC:SCU:
 ```
 
-The factory baud rate is 9600 (`--baud` to change). The IOC user needs to
-be in `dialout` for local serial ports.
+The factory baud rate is 9600 (`--baud` to change). SmarAct can supply an
+ASCII firmware for USB units, according to the SCU user manual; the stock
+USB firmware doesn't answer ASCII.
 
 ### Without hardware
 
+There are simulators for both protocols, served on a pseudo‑terminal:
+
 ```sh
-scu-sim --link /tmp/scu &                  # --sensors 21,19,0 for linear, rotary, no sensor
+scu-wire-sim --link /tmp/scu-wire &          # binary protocol (stock firmware)
+scu-ioc --backend wire --port /tmp/scu-wire --prefix TEST:SCU:
+
+scu-sim --link /tmp/scu &                    # ASCII protocol
 scu-ioc --backend ascii --port /tmp/scu --prefix TEST:SCU:
 ```
 
-Other options: `--axes X,Y,-` names channels A, B, C in PVs (`-` skips a
-channel); `--poll` sets the idle poll period (default 1 s) and
-`--busy-poll` the period while anything moves or holds (default 0.1 s);
-`--no-shell` disables the interactive Python shell (use under procServ);
-`-v` logs all controller traffic.
+`--sensors 21,19,0` gives a linear axis, a rotary axis and an axis with no
+sensor. `scu-wire-sim --asymmetry 0.1` makes moves 10% faster in + than in −.
+
+## Running the IOC
+
+```sh
+scu-ioc --backend wire --port /dev/smaract-scu --prefix 24IDC:SCU: [options]
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--prefix` | PV prefix, used verbatim (include any trailing `:`) |
+| `--axes X,Y,-` | PV names for channels A, B, C; `-` skips a channel (default `A,B,C`) |
+| `--poll`, `--busy-poll` | poll period when idle (1 s) and while moving or holding (0.1 s) |
+| `--no-shell` | no interactive Python shell (use under procServ) |
+| `-v` | log all controller traffic |
+
+`quit()`, `exit()`, end‑of‑file and Ctrl‑C (with `--no-shell`) all release the
+controller cleanly. Motion in progress continues, as with a motor‑record IOC.
+If the link drops, readbacks go INVALID and the IOC reconnects by itself. The
+PVs are listed [below](#pvs).
+
+## Bench tool: `scu`
+
+```sh
+scu --backend wire --port /dev/smaract-scu status
+```
+
+| Command | Does |
+| --- | --- |
+| `status` | controller, temperature, supply voltage, and each axis's state, sensor, position and referencing |
+| `move AXIS POS`, `rel AXIS DELTA` | closed‑loop absolute or relative move (µm, or m° for rotary axes); `--hold MS` |
+| `step AXIS N` | open‑loop steps (signed); `--amp V`, `--freq HZ` |
+| `calibrate AXIS` | sensor calibration (moves several mm both ways) |
+| `reference AXIS` | move to the reference mark; `--auto-zero` makes it 0 |
+| `zero AXIS` | make the current position 0 |
+| `sensor-type AXIS CODE` | set the sensor type (stored in the controller) |
+| `stop [AXIS]` | stop one axis, or all |
+| `speed AXIS --freq F ...` | measure closed‑loop speed against frequency, both directions |
+| `raster ...` | serpentine raster or fly scan (below) |
+| `list` | `sdk` only: connected device IDs |
+| `raw CMD` | `ascii` only: send one command, print the reply |
+
+Axes are `A`/`B`/`C` or `0`/`1`/`2`. Moves wait for completion unless
+`--no-wait` is given. Ctrl‑C stops the axis.
 
 ## Raster scans
 
-`scu raster` runs a serpentine step‑and‑shoot raster over two axes,
-directly on the controller (any backend). Nothing else can use the
-controller while it runs, so stop the IOC first. At each point it:
+`scu raster` runs a serpentine scan over two axes directly on the controller.
+Rows alternate direction, so only the fast axis moves within a row. Each axis
+is given as `AXIS START END STEP` in µm (m° for rotary axes). The range must
+be a whole number of steps, and START and END set the direction. Both axes
+must have sensors and be referenced (`--allow-unreferenced` overrides).
+`--dry-run` prints the plan (with `--speed UM_S`, a time estimate too).
 
-1. moves (absolute, closed loop) and waits for the controller to report
-   the target reached;
-2. waits `--settle` seconds;
-3. reads back both axes (the readback is checked against `--tolerance` if given);
-4. fires the trigger;
-5. dwells for `--dwell` seconds.
+Ctrl‑C, a timeout, a controller error or a tolerance failure stops both
+axes and keeps the partial log. Fly scans also stop if a move ends short of
+its target, e.g. at an end stop.
 
-Rows alternate direction, so within a row only the fast axis moves.
+### Step and shoot
+
+At each point: an absolute closed‑loop move, a wait for target reached,
+`--settle` seconds, a read‑back of both axes (checked against
+`--tolerance`), the trigger, then `--dwell` seconds.
 
 ```sh
-# 25 x 25 mm at 50 um pitch, centred on the reference position, fast = A (X), slow = B (Z)
+# 25 x 25 mm at 50 um pitch about the reference position; fast = A (X), slow = B (Z)
 scu --backend wire --port /dev/smaract-scu raster \
     --fast A -12500 12500 50 --slow B -12500 12500 50 \
     --settle 0.005 --dwell 0.02 --tolerance 2 \
     --trigger serial:/dev/ttyUSB1:dtr --pulse 1 --log run042.csv
-
-# check the plan and a time estimate without moving
-scu raster --fast A -12500 12500 50 --slow B -12500 12500 50 --dry-run --speed 1000
 ```
 
-Each axis is given as `AXIS START END STEP` in µm (millidegrees for rotary
-axes). The range must be a whole number of steps, and the direction comes
-from START and END. Both axes must have sensors and be referenced
-(`--allow-unreferenced` overrides). Ctrl‑C, a move timeout, a controller
-error or a tolerance failure stops both axes and keeps the partial log.
+There's no hardware position compare, so a trigger means "the stage has
+stopped here". Software jitter, of order a millisecond, changes *when* a shot
+fires, not *where*. `--log` writes, per point, the targets, the measured
+positions and the times (move commanded, settled, triggered). `--hold MS`
+keeps the controller correcting at each point, which helps if the stage
+creeps during long dwells.
 
-There's no hardware position compare, so a trigger here means "the stage
-has stopped at this point". Software jitter, of order a millisecond, affects
-*when* a shot fires, not *where*. Triggers:
+Triggers (also used by fly scans):
 
 | `--trigger` | Output |
 | --- | --- |
-| `none` | no output; just dwell |
-| `serial:PORT[:dtr\|rts][:low\|high]` | pulses DTR or RTS on a separate USB‑serial adapter for `--pulse` ms. On TTL adapters an asserted line is electrically low, hence the default `low`. Wire it to a Zebra or detector TTL input (check levels and termination). |
-| `ca:PV[=VALUE]` | writes VALUE (default 1) to an EPICS PV and waits for completion, e.g. a Zebra soft input or a detector trigger PV. Needs `pip install '.[ca]'`. |
+| `none` | no output |
+| `serial:PORT[:dtr\|rts][:low\|high]` | pulses DTR or RTS on a separate USB‑serial adapter for `--pulse` ms. On TTL adapters an asserted line is electrically low, hence the default `low`. Wire it to a Zebra or detector TTL input, checking levels and termination. |
+| `ca:PV[=VALUE]` | writes VALUE (default 1) to an EPICS PV and waits for completion, e.g. a Zebra soft input. Needs the `ca` extra. |
 
-`--log` writes one CSV row per point: index, row, column, targets, measured
-positions, and times relative to the start (move commanded, settled,
-triggered). That's the shot‑to‑position map for the data.
+### Fly scans
 
-`--hold MS` keeps the controller correcting at each target, which helps
-if the stage creeps during long dwells.
-
-### Fly mode
-
-With `--fly`, the fast axis moves continuously along each row and the
-trigger fires once, at the start of each row's move. This is meant for a
-detector that free‑runs at a fixed frame rate from that trigger. The slow
-axis steps between rows, and rows alternate direction.
+With `--fly`, the fast axis moves continuously along each row, and the
+trigger fires once at the start of each row's move. This suits a detector
+that free‑runs at a fixed frame rate from that trigger. The slow axis steps
+between rows.
 
 ```sh
-# 50 um pitch at 100 Hz frames -> 5 mm/s target speed
+# 50 um pitch at 100 Hz frames -> 5 mm/s
 scu --backend wire --port /dev/smaract-scu raster \
     --fast A -12500 12500 50 --slow B -12500 12500 50 --fly --frame-rate 100 \
     --run-up 200 --trigger serial:/dev/ttyUSB1:dtr --log run043.csv --trajectory run043-traj.csv
 ```
 
 **Speed.** The SCU has no velocity setting. In a long closed‑loop move the
-speed is set by the closed‑loop maximum step frequency (50–18,500 Hz) times
-the positioner's step length, which depends on the slide, load and
-amplitude, and it can differ between directions. So the speed is calibrated:
-the target is `--fly-speed` µm/s, or the fast STEP × `--frame-rate`. Test
-moves over the first row's span measure the speed. The frequency is adjusted
-(secant steps, since speed against frequency can be lumpy on stick‑slip
-drives) until the speed is within `--calibration-tolerance` (default 1%, up
-to 8 moves). If that isn't reached, the best frequency found is used.
-This is done **separately for each direction**,
-because serpentine rows alternate, so + rows and − rows can use different
-frequencies. `--fly-freq HZ` skips calibration and uses one frequency both
-ways. The fast axis's original frequency is restored afterwards. To see how
-your slides behave:
+speed is the closed‑loop maximum step frequency (50–18,500 Hz) times the
+positioner's step length. Step length depends on the slide, load and
+amplitude, and on SLC‑1740s it also varies with frequency and direction (see
+below). So speed is calibrated:
+
+- **Target:** `--fly-speed` in µm/s, or the fast STEP × `--frame-rate`.
+- **Calibration moves:** test moves over the first row's span, **for each
+  direction separately**. The frequency is adjusted by secant steps until
+  the speed is within `--calibration-tolerance` (default 1%, up to 8 moves
+  per direction), or the best frequency found is used.
+- **Per‑direction frequencies:** + rows and − rows can end up with
+  different frequencies.
+- **Restore:** the fast axis's original frequency is put back afterwards,
+  also after an abort.
+- **No calibration:** `--fly-freq HZ` uses one fixed frequency both ways.
+
+To see how a slide behaves:
 
 ```sh
-scu --backend wire --port /dev/smaract-scu speed A --freq 1000 2000 5000 10000 18500 --distance 2000
+scu --backend wire --port /dev/smaract-scu speed A --freq 1000 2000 5000 10000 18500 --distance 10000
 ```
 
-This prints, for each frequency, the speed in each direction, the
-asymmetry between them, the mean step length per Hz, the non‑uniformity, and
-the number and spacing of position samples. Test moves are centred on
-`--center` (default 0), and a move that stops short (an end stop) ends the
-test.
+This prints, for each frequency, the speed in each direction, the asymmetry,
+the step length per Hz, the deviation from constant speed, and the number and
+spacing of position samples. Test moves are centred on `--center` (default 0),
+and one that stops short ends the test.
 
-**What gets recorded.** During each row the fast axis is sampled about
-every millisecond on the `wire` backend with a 1 ms latency timer. Each
-sample is stamped at the midpoint of its exchange.
-- The row's speed is fitted over the grid region, and the progress lines
-  report it with its rms deviation from constant speed.
-- `--log` gives, for every grid point, the time it was crossed and the time
-  since that row's trigger (`dt_cross`).
-- `--trajectory` keeps every sample. Use `--sample-ms` to thin it, since a
-  full 25 mm square at full rate means millions of rows.
+**Run‑up.** `--run-up` adds travel before and after each row so the grid is
+crossed at full speed. The first grid point comes about run‑up/speed after the
+trigger, so the detector must keep taking frames for that long plus the row.
+Make sure the run‑up fits inside the travel. An SLC‑1740 has 26 mm, so a
+full 25 mm square leaves ±500 µm at most.
 
-With a detector started by the trigger, frame *k* of a row is at
-*k*/rate after the trigger. The log turns that into a position, so a speed
-that's slightly off becomes a known position error, not an unknown one.
+**What is recorded.**
+- **Sampling:** during each row the fast axis is sampled (about every 1 ms
+  on Linux with a 1 ms latency timer, every 16 ms on macOS, never closer than
+  0.5 ms), with each sample stamped at the midpoint of its exchange.
+- **Per row:** the speed is fitted over the grid region and the progress
+  lines report it with the deviation from constant speed.
+- **`--log`:** for every grid point, the time it was crossed
+  (`t_cross`, and `dt_cross` from the row trigger), the row's speed, and the
+  measured slow‑axis position.
+- **`--trajectory`:** every sample. `--sample-ms` thins it, since a full
+  square means millions of rows.
 
-**Run‑up.** `--run-up` adds travel before and after each row, so the stage
-is at constant speed over the grid. Check the run‑up still fits within
-the travel. The first grid point is reached about run‑up/speed after the
-trigger (also logged), so the detector should take frames for that long
-plus the row.
+With the detector started by the trigger, frame *k* is at *k*/rate after it,
+and the logs map that time to a position. A small speed error becomes a
+known position error rather than an unknown one. A speed error ε over N
+frames drifts by about ε × N × pitch (1% over 80 frames at 50 µm is 40 µm),
+so tighten `--calibration-tolerance` if that matters.
 
-**Plots.** `scu-flyplot` reads the two logs (`pip install '.[plot]'` for
-the plot; the summary works without it):
+### Fly‑scan analysis: `scu-flyplot`
 
 ```sh
-scu-flyplot run043.csv run043-traj.csv --frame-rate 100 -o run043.png
+scu-flyplot run043.csv run043-traj.csv --frame-rate 100 -o run043.png \
+    --map run043-map.png --frames-out run043-frames.csv
 ```
 
-It plots four panels:
-- deviation from constant speed against position for every row, + and − rows
-  in different colours;
-- frame position error against frame number, along the direction of travel
-  (negative means behind). This is where a detector free‑running from the
-  row trigger actually took each frame, compared with the ideal pitch, so a
-  speed error shows up as a straight‑line drift;
-- fitted speed per row;
-- trigger‑to‑first‑grid‑point delay per row.
+- **`-o`** draws four panels:
+  - deviation from constant speed against position, per row (+ and − rows
+    coloured separately);
+  - frame position error against frame number, along the direction of travel
+    (negative means behind), anchored at the first grid point, so speed error
+    shows as straight‑line drift;
+  - fitted speed per row;
+  - trigger‑to‑first‑grid‑point delay per row.
 
-It also prints a per‑direction summary including the drift at the end of the
-rows.
+  Without `-o` the plot opens in a window; `--no-plot` skips it.
+- **`--map`** shows where the sample went: the stage's actual path, and every
+  detector frame at its actual position, coloured by its error along travel.
+  The scale covers 99.5% of frames, so one bad row saturates instead of washing
+  out the rest. A fixed slide pattern shows as vertical stripes, drift over the
+  scan as a change down the map, and a one‑off disturbance as a streak.
+- **`--frames-out`** writes every detector frame's row, frame number, time,
+  actual fast and slow positions, and, inside the grid, nominal position and
+  error. This is the frame‑to‑position table for data processing. Frames
+  before a row's first position sample (in the run‑up) are left out, and
+  positions are for frame start times.
+- A per‑direction summary (speed, smoothness, first‑point delay, end‑of‑row
+  drift) is always printed.
 
-Two more outputs show where the sample went:
+### Measured behaviour: SLC‑1740 on a CU‑3D
 
-```sh
-scu-flyplot run043.csv run043-traj.csv --frame-rate 100 --map run043-map.png --frames-out run043-frames.csv
-```
+These were measured with the stage horizontal on a Mac (16 ms sampling), so
+treat them as indicative:
 
-- `--map` draws two panels: the stage's actual path over the whole scan,
-  and every detector frame at its actual position, coloured by its error along
-  the direction of travel. The colour scale covers 99.5% of frames, so a single
-  bad row saturates instead of washing out the rest. Patterns tied to the
-  slide show as vertical stripes, drift over the scan as a change down the
-  map, and a one‑off disturbance as a single streak.
-- `--frames-out` writes one line per detector frame, assuming it free‑runs from
-  each row trigger at `--frame-rate`. Each line has the row, frame number,
-  time, actual fast and slow positions, and, for frames inside the grid, the
-  nominal position and the error. This is the frame‑to‑position table for
-  data processing. Frames before the first position sample of a row (the
-  first few ms of run‑up) are omitted.
-
-The slow‑axis position in these comes from the measured position logged at
-the start of each row (older logs fall back to the target). A speed error of ε over N frames gives about ε × N × pitch of drift,
-so 1% over 80 frames at 50 µm is 40 µm. Tighten `--calibration-tolerance`
-if that matters.
-
-Limits: speed and smoothness are whatever the slides deliver at that
-frequency; the trajectory log shows how uniform they are. Timing is
-software timing. The trigger is about 1 ms from the move command, and
-samples are within about 1 ms.
+- **Speed against frequency:** about 1.7 µm per Hz (1.7 mm/s at 1 kHz,
+  about 17 mm/s at 10 kHz, about 40 mm/s at 18.5 kHz). Both slides are nearly
+  identical.
+- **Direction asymmetry:** depends strongly on frequency, swinging between
+  about −35% and +30% from 1 to 18.5 kHz. That's why calibration is done per
+  direction.
+- **Fly scan, 81 × 81 at 50 µm, 2.5 mm/s:**
+  - row speed repeatable to about 0.1%;
+  - both directions within 0.2% of target over the scan;
+  - deviation from constant speed about 2 µm rms;
+  - frames within about ±10 µm of the grid, except one row with a one‑off
+    slowdown of about 36 µm;
+  - trigger‑to‑first‑point jitter about ±0.5 ms;
+  - about 0.2 s between rows.
+- **Fixed pattern:** a repeatable ±5 µm pattern along the fast axis (near
+  −500 and +200 µm), the same in every row and both directions. It comes from
+  the slide or its sensor. A fixed‑pattern calibration film will show which.
 
 ## PVs
 
-The prefix is used verbatim. Device-level PVs are `$(PREFIX)NAME`;
-per-axis PVs are `$(PREFIX)$(AXIS):NAME`, with AXIS defaulting to A, B, C.
+The prefix is used verbatim. Device‑level PVs are `$(PREFIX)NAME`; per‑axis
+PVs are `$(PREFIX)$(AXIS):NAME`, with AXIS defaulting to A, B, C.
 
 ### Device
 
@@ -333,7 +409,7 @@ per-axis PVs are `$(PREFIX)$(AXIS):NAME`, with AXIS defaulting to A, B, C.
 | --- | --- | --- |
 | `CONNECTED` | bi | Disconnected / Connected |
 | `MODEL`, `DEVICE_ID`, `FIRMWARE` | stringin | from the controller |
-| `BACKEND`, `VERSION` | stringin | `sdk` or `ascii`; IOC version |
+| `BACKEND`, `VERSION` | stringin | `sdk`, `wire` or `ascii`; IOC version |
 | `TEMPERATURE` | ai | °C, every 5 s |
 | `HV` | ai | internal 100 V supply, V |
 | `STOP_ALL` | bo | write 1 |
@@ -341,37 +417,36 @@ per-axis PVs are `$(PREFIX)$(AXIS):NAME`, with AXIS defaulting to A, B, C.
 
 ### Per axis
 
-Names follow the motor record where there is an equivalent, so screens
-and habits carry over, but these are separate records rather than a motor
-record. Positions are µm for linear sensor types and millidegrees for rotary
-ones; EGU switches when the sensor type is read.
+Names follow the motor record where there's an equivalent, but these are
+separate records, not a motor record. Positions are µm for linear sensor
+types and m° for rotary ones; EGU switches when the sensor type is read.
 
 | PV | Type | Notes |
 | --- | --- | --- |
-| `VAL` | ao | closed-loop absolute move; put-callback completes with `DMOV` already 0 |
+| `VAL` | ao | closed‑loop absolute move; put‑callback completes with `DMOV` already 0 |
 | `RBV` | ai | position; INVALID without a sensor or connection |
 | `RLV` | ao | relative move: `VAL += RLV` |
 | `TWV`, `TWF`, `TWR` | ao, bo, bo | tweak by `TWV` |
 | `DMOV`, `MOVN` | bi | done (stopped or holding) / moving |
 | `STATUS` | mbbi | Stopped, Setting amplitude, Moving, Targeting, Holding, Calibrating, Referencing |
 | `STOP` | bo | stops the axis and discards queued commands for it |
-| `HLM`, `LLM` | ao | IOC-side soft limits for `VAL`/`RLV`/tweak; disabled when `HLM <= LLM` (default 0, 0) |
-| `HOLD` | longout | ms to actively hold after closed-loop moves and referencing; 60000 = until stopped |
-| `STEP` | longout | open-loop steps, signed, \|n\| < 30000 |
+| `HLM`, `LLM` | ao | IOC‑side soft limits for `VAL`/`RLV`/tweak; disabled when `HLM <= LLM` (default 0, 0) |
+| `HOLD` | longout | ms to hold actively after closed‑loop moves and referencing; 60000 = until stopped |
+| `STEP` | longout | open‑loop steps, signed, \|n\| < 30000 |
 | `STEP_AMP`, `STEP_FREQ` | ao, longout | 15–100 V, 1–18500 Hz |
 | `CALIBRATE` | bo | sensor calibration: moves several mm both ways; keep clear of end stops |
-| `REFERENCE`, `AUTO_ZERO` | bo, bo | move to reference (in `SAFE_DIR`); auto-zero sets 0 there |
+| `REFERENCE`, `AUTO_ZERO` | bo, bo | move to reference (in `SAFE_DIR`); auto‑zero makes it 0 |
 | `REFERENCED` | bi | physical position known |
 | `SET_ZERO` | bo | current position becomes 0 (stored if referenced) |
 | `SENSOR_PRESENT` | bi | |
-| `SENSOR_TYPE`, `SENSOR_TYPE_RBV`, `SENSOR_NAME` | longout, longin, stringin | type code, stored in the controller's NV memory; see the table in `protocol.py` |
-| `CL_MAX_FREQ`, `CL_MAX_FREQ_RBV` | longout, longin | closed-loop max step frequency, Hz (sets speed) |
-| `SAFE_DIR`, `SAFE_DIR_RBV` | bo, bi | direction for calibrate/reference, stored in NV memory |
+| `SENSOR_TYPE`, `SENSOR_TYPE_RBV`, `SENSOR_NAME` | longout, longin, stringin | type code, stored in the controller; codes in `protocol.py` |
+| `CL_MAX_FREQ`, `CL_MAX_FREQ_RBV` | longout, longin | closed‑loop maximum step frequency, Hz (sets speed) |
+| `SAFE_DIR`, `SAFE_DIR_RBV` | bo, bi | direction for calibrate/reference, stored in the controller |
 | `LAST_ERROR` | lsi | last rejected command, e.g. "No sensor present (E19)" |
 
-A rejected `VAL` (controller error, limit, not connected) snaps back to the
-current position and sets `LAST_ERROR`. `VAL` follows `RBV` after open-loop
-moves, stops, calibration and referencing.
+A rejected `VAL` (controller error, soft limit, not connected) snaps back to
+the current position and sets `LAST_ERROR`. `VAL` follows `RBV` after
+open‑loop moves, stops, calibration and referencing.
 
 ### ophyd
 
@@ -392,58 +467,92 @@ x = SCUAxis("24IDC:SCU:A", name="x")
 ## Commissioning an axis
 
 1. **Sensor type.** Check `SENSOR_NAME` against the positioner's label or
-   datasheet. SLC positioners with the "l" (improved micro) sensor come in
-   three variants: single reference mark is L (21), distance-coded marks are
-   LC (18), and end-stop referenced is LE (23). Wrong types are the usual
-   cause of referencing failures.
+   datasheet. SLC positioners with the "l" sensor come as single reference
+   mark L (21), distance‑coded marks LC (18), or end‑stop referenced LE (23).
+   A wrong type is the usual cause of referencing failures.
 2. **Calibrate** once per positioner/channel pairing, away from the end
    stops. The result is stored in the controller.
 3. **Safe direction.** Set `SAFE_DIR` towards free travel.
-4. **Reference** after each power-up (`REFERENCED` goes to Yes). Use
-   `AUTO_ZERO` if you want 0 at the reference mark.
-5. **Soft limits.** Set `HLM` and `LLM` for the mechanics around the stage.
-   They live in the IOC only; use autosave or the startup script to restore
-   them.
-6. **Speed.** `CL_MAX_FREQ` sets the closed-loop speed (default 5000 Hz).
+4. **Reference** after each power‑up, so that `REFERENCED` reads Yes. Use
+   `AUTO_ZERO` for 0 at the reference mark. Raster scans assume this.
+5. **Soft limits.** Set `HLM` and `LLM` for the mechanics. They live in the
+   IOC only, so restore them with autosave or the startup script.
+6. **Speed.** `CL_MAX_FREQ` sets the closed‑loop speed. The manual's default
+   is 5000 Hz, but boards may have been set differently (the CU‑3D tested here
+   was at 10000). For fly scans, run `scu speed` on each slide.
 
-## Tests
+## Development
+
+| Module | Role |
+| --- | --- |
+| `backend.py` | backend interface (blocking; µm / m° / 1/10 V / Hz) |
+| `wire.py`, `wire_backend.py` | binary protocol map, and the `wire` backend |
+| `dll.py` | `sdk` backend: ctypes binding of SCU3DControl.dll / libscu3dcontrol.so |
+| `protocol.py`, `ascii.py` | status codes, sensor types, errors, ASCII framing; the `ascii` backend |
+| `wire_sim.py`, `sim.py` | simulators (`scu-wire-sim`, `scu-sim`) |
+| `ioc.py` | pythonSoftIOC records and worker thread (`scu-ioc`) |
+| `cli.py` | `scu` |
+| `raster.py`, `fly.py` | step‑and‑shoot and fly scans, speed calibration |
+| `flyplot.py` | `scu-flyplot` |
+
+Also in the repository:
+- **`docs/wire-protocol.md`:** the binary protocol, with the evidence and
+  confidence for each part.
+- **`tools/ftrace/`:** the capture shim, trace decoder and capture session
+  used to check the protocol against hardware (see its README).
+- **`CHANGES.md`:** the history.
+
+### Tests
 
 ```sh
-pip install -e '.[dev]'
+pip install -e '.[dev,plot]'
 pytest
 ```
 
-The protocol, simulator, ASCII backend (over a pty) and CLI tests take
-about a second. `tests/test_ioc.py` runs `scu-sim` plus `scu-ioc` as
-subprocesses and drives them with caproto (about 15 s; skipped without
-caproto). The SDK backend is tested against a fake library object, plus a
-check that missing symbols are bound as "not supported".
+There are about 100 tests, taking about 3 minutes; most of that is the fly
+tests running real‑time moves on the simulator. They cover:
+
+- **Protocol layer:** framing, the simulators, all three backends (`wire`
+  over a pty and replaying exchanges captured from real hardware; `sdk` against
+  a fake library), and the `scu` commands.
+- **IOC end to end:** `tests/test_ioc.py` runs the IOC on the `wire` and
+  `ascii` simulators and drives it over Channel Access with caproto.
+- **Scans:** raster, fly and flyplot, including calibration on a simulated
+  lumpy, asymmetric slide.
+- **Vendor check:** `tests/test_wire_sdk.py` runs SmarAct's real library
+  against the `wire` simulator. It needs `SCU_SDK_LIB=/path/to/libscu3dcontrol.so`
+  and a C compiler, and is skipped otherwise.
 
 ## Known gaps
 
-- **SDK backend:** it has run against hardware on Windows (DLL) and on
-  Linux (libscu3dcontrol.so 1.5.16, CU-3D with firmware 5.1.192).
-- **Wire backend:** the protocol is reverse engineered (see
-  `docs/wire-protocol.md`). It's checked three ways: against SmarAct's library,
-  replayed against exchanges captured from a CU-3D with firmware 5.1.192,
-  and against the simulator. It has **not yet driven real hardware**. Other
-  firmware versions or models may differ. Asynchronous mode, scale,
-  alignment and the EEPROM/SRAM commands are deliberately not implemented. Argument order and units follow the header
-  and Programmer's Guide; the ctypes binding assumes cdecl (the header
-  declares no calling convention, which is moot on x64).
-- **ASCII backend has only been tested against the simulator.** In
-  particular, the manual's MPA/MPR examples are integer µm. Whether the
-  firmware accepts one decimal place (which the IOC sends for sub-µm
-  targets) is unverified. If it doesn't, `LAST_ERROR` will show a parse,
-  syntax or parameter error.
-- **PV Access on Windows:** the bundled pvxs server fails to start
+- **`wire` backend.** The protocol is reverse engineered (see
+  `docs/wire-protocol.md`), and the SDK licence may restrict that, so check it
+  before sharing. It has driven a CU‑3D (firmware 5.1.192) from Linux x86 and
+  macOS, but hasn't yet run on a Raspberry Pi. Other firmware versions and
+  models may differ. Asynchronous mode, scale, alignment and the EEPROM/SRAM
+  commands are deliberately not implemented.
+- **`sdk` backend.** It has run on Windows (DLL) and Linux (libscu3dcontrol.so
+  1.5.16). The ctypes binding assumes cdecl; the header declares no calling
+  convention, which is moot on x64.
+- **`ascii` backend.** It has only been tested against the simulator. The
+  manual's MPA/MPR examples use whole µm, so it's unverified whether the
+  firmware accepts the one decimal place the IOC sends for sub‑µm targets. If
+  it doesn't, `LAST_ERROR` will show a parse, syntax or parameter error.
+- **Scans are command‑line only.** `scu raster` needs the controller to
+  itself; the IOC has no raster PVs yet.
+- **Fly‑scan timing is software timing.** The trigger is about 1 ms from the
+  move command and position samples are within about 1 ms, with no hardware
+  position compare or encoder output. Speed is calibrated once per scan;
+  slow drift over a long scan isn't corrected row by row.
+- **Not exposed in the IOC:** move to end stop, scale offset and inversion,
+  vertical alignment, the target‑reached threshold and gain channel
+  properties, and the keep‑alive timer.
+- **No motor record.** `EpicsMotor` won't work; use `PVPositioner` as above.
+- **Soft limits** are not applied to open‑loop `STEP`, nor to `scu`
+  commands.
+- **Holding.** `DMOV` goes to 1 when a held target is reached. With
+  `HOLD` = 60000 the axis holds, and is fast‑polled, until `STOP`.
+- **PV Access on Windows.** The bundled pvxs server fails to start
   (`event_base_new() fails`), so the IOC serves Channel Access only.
-- **Not exposed:** move to end stop (MES), scale offset and inversion (SSC),
-  vertical alignment (SPA), the target-reached threshold and gain channel
-  properties (SCP), and the keep-alive timer (K).
-- **No motor record**: `EpicsMotor` won't work; use `PVPositioner` as above.
-- **Soft limits** are not applied to open-loop `STEP`.
-- **Holding:** `DMOV` goes to 1 when a held target is reached. With
-  `HOLD` = 60000 the axis holds, and is fast-polled, until `STOP`.
-- **Simulator** motion is a crude constant-speed model; scale inversion is
-  not modelled.
+- **Simulators.** They use a crude constant‑speed motion model (optionally
+  asymmetric or with a custom speed curve), and don't model scale inversion.

@@ -1,13 +1,16 @@
 # SCU binary protocol (stock USB firmware)
 
 Reconstructed from SmarAct's `libscu3dcontrol.so` 1.5.16 (x86‑64) by static
-analysis, for interoperability with hardware we own (running the IOC on a
-Raspberry Pi, for which no SDK build exists). Internal use. SmarAct's SDK
-licence may restrict reverse engineering, so check it before relying on this
-or sharing it.
+analysis, for interoperability with hardware we own. The aim was to drive
+stock‑firmware SCUs from hosts SmarAct's SDK doesn't support (Raspberry Pi,
+macOS) or without it. Internal use. SmarAct's SDK licence may restrict
+reverse engineering, so check it before relying on this or sharing it.
 
 Code: `src/scu_ioc/wire.py` holds the same tables and is the reference;
-this document gives the evidence and confidence.
+`src/scu_ioc/wire_backend.py` implements it (the `wire` backend). That
+backend has driven a CU‑3D (firmware 5.1.192) from Linux x86 and macOS,
+including closed‑loop moves, referencing, raster and fly scans. This
+document gives the evidence and confidence for each part.
 
 ## Status of the map
 
