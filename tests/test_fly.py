@@ -148,3 +148,36 @@ def test_asymmetric_slide_gets_per_direction_frequencies(tmp_path):
     # both directions now run at the target speed
     assert all(f.speed == pytest.approx(1000, rel=0.05) for f in r.row_fits)
     b.close()
+
+
+def _lumpy(f, d):
+    """Speed curve shaped like the SLC-1740s measured on a CU-3D: ~1.7 um/Hz
+    with direction-dependent wiggles of tens of percent."""
+    import math
+    wiggle = 0.25 * math.sin(f / 700.0) * (1 if d > 0 else -1)
+    return 1.7 * f * (1 + wiggle) / 10.0      # scaled to sim travel
+
+
+def test_secant_calibration_on_lumpy_slide():
+    sim = WireSCU(sensor_types=(21, 21, 0))
+    sim.axes[0].response = _lumpy
+    path, _ = serve_pty(sim)
+    b = WireBackend(path)
+    b.connect()
+    lines = []
+    for d, (a, z) in ((+1, (-400, 400)), (-1, (400, -400))):
+        f, fit = calibrate_frequency(b, 0, False, a, z, 300.0, 10000, tol=0.005,
+                                     log=lines.append)
+        assert fit.speed == pytest.approx(300.0, rel=0.005), lines
+        assert abs(_lumpy(f, d) - 300.0) / 300.0 < 0.006
+    assert len(lines) <= 14          # both directions, within the iteration budget
+    b.close()
+
+
+def test_next_frequency_secant_and_fallback():
+    from scu_ioc.fly import _next_frequency
+    assert _next_frequency([(1000, 100.0)], 200.0) == pytest.approx(2000)
+    # secant through two points of a non-proportional (offset) response
+    assert _next_frequency([(1000, 150.0), (2000, 250.0)], 200.0) == pytest.approx(1500)
+    # decreasing segment: fall back to proportional on the last point
+    assert _next_frequency([(1000, 250.0), (2000, 150.0)], 300.0) == pytest.approx(4000)

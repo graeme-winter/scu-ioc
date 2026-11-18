@@ -161,15 +161,29 @@ def measure_speed(b: Backend, ch: int, rot: bool, a: float, z: float, freq: int,
     return SpeedMeasurement(fit_speed(s, a + m, z - m), len(s), med)
 
 
+def _next_frequency(history, target):
+    """Next trial frequency from (f, v) measurements. Secant through the last
+    two points when the response there is increasing (speed vs frequency is
+    lumpy on stick-slip drives, so proportional scaling can oscillate);
+    otherwise scale the last point proportionally."""
+    f1, v1 = history[-1]
+    if len(history) >= 2:
+        f0, v0 = history[-2]
+        if f1 != f0 and (v1 - v0) / (f1 - f0) > 0:
+            return f1 + (target - v1) * (f1 - f0) / (v1 - v0)
+    return f1 * target / v1
+
+
 def calibrate_frequency(b: Backend, ch: int, rot: bool, a: float, z: float,
-                        target: float, f0: int, tol: float = 0.05, max_iter: int = 5,
+                        target: float, f0: int, tol: float = 0.01, max_iter: int = 8,
                         log=print, stop_event=None):
-    """Find the closed-loop frequency giving `target` speed on a..z,
-    assuming speed is roughly proportional to frequency. Leaves the axis at
-    a or z. Returns (frequency, measured Fit)."""
+    """Find the closed-loop frequency giving `target` speed moving a -> z.
+    Returns (frequency, Fit) for the best measurement: the first within
+    tol, otherwise the closest one found."""
     f = int(min(max(f0, F_MIN), F_MAX))
-    fit = None
-    for i in range(max_iter):
+    history = []          # (f, speed)
+    best = None           # (|error|, f, fit)
+    for _ in range(max_iter):
         meas = measure_speed(b, ch, rot, a, z, f, stop_event)
         fit = meas.fit
         if fit is None:
@@ -177,21 +191,29 @@ def calibrate_frequency(b: Backend, ch: int, rot: bool, a: float, z: float,
                 f"calibration: only {meas.samples} samples ({meas.interval_ms:.1f} ms apart) "
                 "in the move; the row is too short for this speed, or sampling is slow "
                 "(FTDI latency timer?)")
+        err = fit.speed / target - 1
         log(f"  calibrate {'+' if z > a else '-'}: {f} Hz -> {fit.speed:.1f}/s "
-            f"(target {target:.1f}/s, rms {fit.rms:.2f})")
-        if abs(fit.speed / target - 1) <= tol:
+            f"({100 * err:+.2f}%, rms {fit.rms:.2f})")
+        if best is None or abs(err) < best[0]:
+            best = (abs(err), f, fit)
+        if abs(err) <= tol:
             return f, fit
-        f_new = int(round(min(max(f * target / fit.speed, F_MIN), F_MAX)))
-        if f_new == f:
-            log(f"  calibrate: limited to {f} Hz; best speed {fit.speed:.1f}/s")
-            return f, fit
+        history.append((f, fit.speed))
+        f_new = int(round(min(max(_next_frequency(history, target), F_MIN), F_MAX)))
+        if f_new == f or any(f_new == h[0] for h in history):
+            # clamped, or revisiting a frequency: no further progress possible
+            if f_new in (F_MIN, F_MAX) and f_new == f:
+                log(f"  calibrate: limited to {f} Hz; best speed {fit.speed:.1f}/s")
+            break
         f = f_new
-    log(f"  calibrate: not within {tol:.0%} after {max_iter} tries; using {f} Hz")
+    _, f, fit = best
+    log(f"  calibrate: best {f} Hz ({100 * (fit.speed / target - 1):+.2f}%), "
+        f"not within {100 * tol:g}%")
     return f, fit
 
 
 def calibrate_directions(b: Backend, ch: int, rot: bool, a: float, z: float,
-                         target: float, f0: int, tol: float = 0.05, log=print,
+                         target: float, f0: int, tol: float = 0.01, log=print,
                          stop_event=None) -> dict:
     """Calibrate each direction separately (serpentine rows alternate, and
     a slide need not be equally fast both ways). Returns {+1: Hz, -1: Hz}
@@ -225,7 +247,7 @@ def run_fly(b: Backend, fast: Line, slow: Line, *, frame_rate: float | None = No
             settle: float = 0.0, trigger: Trigger | None = None,
             log_path: str | None = None, trajectory_path: str | None = None,
             stop_event: threading.Event | None = None, allow_unreferenced: bool = False,
-            progress=None, log=print, calibration_tolerance: float = 0.05,
+            progress=None, log=print, calibration_tolerance: float = 0.01,
             sample_interval: float = 0.0) -> FlyResult:
     fpts, spts = fast.points, slow.points
     if fast.channel == slow.channel:

@@ -135,7 +135,8 @@ def _run_fly(a, b, fast, slow) -> int:
                     cl_freq=a.fly_freq, run_up=a.run_up, settle=a.settle, trigger=trig,
                     log_path=a.log, trajectory_path=a.trajectory,
                     allow_unreferenced=a.allow_unreferenced, progress=progress,
-                    sample_interval=a.sample_ms / 1000.0)
+                    sample_interval=a.sample_ms / 1000.0,
+                    calibration_tolerance=a.calibration_tolerance / 100.0)
     except (RasterAborted, ValueError) as e:
         print(f"not started: {e}", file=sys.stderr)
         return 1
@@ -273,6 +274,8 @@ def main(argv=None) -> int:
     g.add_argument("--fly-speed", type=float, help="target fast-axis speed, um/s")
     g.add_argument("--fly-freq", type=int,
                    help="use this closed-loop frequency, Hz (no calibration)")
+    g.add_argument("--calibration-tolerance", type=float, default=1.0,
+                   help="speed calibration tolerance, %% (default 1)")
     g.add_argument("--run-up", type=float, default=0.0,
                    help="extra travel before/after each row, um, so the grid is at full speed")
     g.add_argument("--trajectory", help="CSV of every fast-axis position sample")
