@@ -107,6 +107,82 @@ def _run_raster(a, b, fast, slow) -> int:
     return 0
 
 
+def _run_fly(a, b, fast, slow) -> int:
+    from .fly import run_fly
+    from .raster import RasterAborted, make_trigger
+    for opt in ("dwell", "tolerance"):
+        if getattr(a, opt):
+            print(f"note: --{opt} is ignored in fly mode", file=sys.stderr)
+    trig = make_trigger(a.trigger, a.pulse)
+    print(f"trigger: {trig.describe()} (start of each row)")
+
+    def progress(r, nrows, fit, times, t_trig, elapsed):
+        if a.quiet:
+            return
+        if fit is None:
+            print(f"  row {r + 1}/{nrows}: too few samples in the grid region to fit speed")
+            return
+        hit = [t for t in times if t is not None]
+        first = f"{(hit[0] - t_trig) * 1000:.1f} ms" if hit else "never"
+        print(f"  row {r + 1}/{nrows}: {fit.speed:.1f} um/s, rms {fit.rms:.2f} um "
+              f"(max {fit.max_dev:.2f}), {fit.n} samples, first point at {first} "
+              f"after trigger, {len(hit)}/{len(times)} points crossed, {elapsed:.1f} s",
+              flush=True)
+
+    try:
+        r = run_fly(b, fast, slow, frame_rate=a.frame_rate, speed=a.fly_speed,
+                    cl_freq=a.fly_freq, run_up=a.run_up, settle=a.settle, trigger=trig,
+                    log_path=a.log, trajectory_path=a.trajectory,
+                    allow_unreferenced=a.allow_unreferenced, progress=progress,
+                    sample_interval=a.sample_ms / 1000.0)
+    except (RasterAborted, ValueError) as e:
+        print(f"not started: {e}", file=sys.stderr)
+        return 1
+    finally:
+        trig.close()
+    fits = [f for f in r.row_fits if f]
+    if fits:
+        sp = [f.speed for f in fits]
+        print(f"{r.rows_done} rows in {r.elapsed:.1f} s at {r.frequency} Hz; speed "
+              f"{min(sp):.1f}..{max(sp):.1f} um/s (mean {sum(sp) / len(sp):.1f}); "
+              f"worst row rms {max(f.rms for f in fits):.2f} um")
+        if r.target_speed:
+            mean = sum(sp) / len(sp)
+            print(f"mean speed is {100 * (mean / r.target_speed - 1):+.1f}% from target")
+    for path in (a.log, a.trajectory):
+        if path:
+            print(f"log: {path}")
+    if r.aborted:
+        print(f"ABORTED: {r.aborted} (axes stopped)", file=sys.stderr)
+        return 3
+    return 0
+
+
+def _run_speed(a, b) -> int:
+    from .fly import measure_speed
+    cfg = b.axis_config(a.channel)
+    if not cfg.sensor_present:
+        print("speed needs a sensor", file=sys.stderr)
+        return 1
+    orig = cfg.cl_max_frequency
+    here = b.position(a.channel, cfg.rotary)
+    there = here + a.distance
+    print(f"{'ABC'[a.channel]}: moves between {here:.1f} and {there:.1f}")
+    print(f"{'freq Hz':>8} {'speed /s':>10} {'per step':>9} {'rms':>6}")
+    try:
+        for i, f in enumerate(a.freq):
+            s, e = (here, there) if i % 2 == 0 else (there, here)
+            fit = measure_speed(b, a.channel, cfg.rotary, s, e, f)
+            if fit is None:
+                print(f"{f:8d}  too few samples: use a longer --distance")
+            else:
+                print(f"{f:8d} {fit.speed:10.1f} {1000 * fit.speed / f:8.1f}n {fit.rms:6.2f}")
+    finally:
+        b.set_cl_max_frequency(a.channel, orig)
+        b.move_abs(a.channel, here, 0, cfg.rotary)
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="SmarAct SCU bench tool")
     ap.add_argument("--backend", choices=["sdk", "dll", "wire", "ascii"], default="sdk",
@@ -171,6 +247,25 @@ def main(argv=None) -> int:
                    help="assumed closed-loop speed, um/s, for the time estimate")
     p.add_argument("--dry-run", action="store_true", help="print the plan and exit")
     p.add_argument("--quiet", action="store_true", help="no per-row progress")
+    g = p.add_argument_group("fly mode (fast axis moves continuously; one trigger per row)")
+    g.add_argument("--fly", action="store_true", help="fly the fast axis")
+    g.add_argument("--frame-rate", type=float,
+                   help="detector frame rate, Hz: target speed = fast STEP x rate")
+    g.add_argument("--fly-speed", type=float, help="target fast-axis speed, um/s")
+    g.add_argument("--fly-freq", type=int,
+                   help="use this closed-loop frequency, Hz (no calibration)")
+    g.add_argument("--run-up", type=float, default=0.0,
+                   help="extra travel before/after each row, um, so the grid is at full speed")
+    g.add_argument("--trajectory", help="CSV of every fast-axis position sample")
+    g.add_argument("--sample-ms", type=float, default=0.0,
+                   help="minimum interval between position samples, ms "
+                        "(default: as fast as the link allows, ~1 kHz)")
+
+    p = sub.add_parser("speed", help="measure closed-loop speed vs frequency")
+    p.add_argument("channel", type=parse_channel)
+    p.add_argument("--freq", type=int, nargs="+", required=True, help="frequencies to try, Hz")
+    p.add_argument("--distance", type=float, default=1000.0,
+                   help="test move length from the current position, um (default 1000)")
 
     p = sub.add_parser("raw", help="ascii: send one command, print the answer")
     p.add_argument("command")
@@ -188,6 +283,15 @@ def main(argv=None) -> int:
         if a.speed:
             t = estimate_seconds(fast, slow, a.speed, a.dwell, a.settle)
             print(f"estimated time at {a.speed:g} um/s: {t / 60:.1f} min")
+        if a.fly:
+            target = a.fly_speed or (a.frame_rate * fast.step if a.frame_rate else None)
+            nf = len(fast.points)
+            if target:
+                print(f"fly: target speed {target:g} um/s; {nf} grid points per row, "
+                      f"{fast.step / target * 1000:.2f} ms apart")
+            if a.frame_rate:
+                print(f"detector: >= {nf} frames per trigger at {a.frame_rate:g} Hz, "
+                      f"one trigger per row ({len(slow.points)} rows)")
         if a.dry_run:
             return 0
 
@@ -224,7 +328,11 @@ def main(argv=None) -> int:
                 print("  " + describe(b, ch))
             return 0
         if a.cmd == "raster":
+            if a.fly:
+                return _run_fly(a, b, fast, slow)
             return _run_raster(a, b, fast, slow)
+        if a.cmd == "speed":
+            return _run_speed(a, b)
         if a.cmd == "stop":
             for ch in ([a.channel] if a.channel is not None else range(info.channels)):
                 b.stop(ch)

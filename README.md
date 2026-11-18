@@ -214,6 +214,61 @@ triggered). That's the shot‑to‑position map for the data.
 `--hold MS` keeps the controller correcting at each target, which helps
 if the stage creeps during long dwells.
 
+### Fly mode
+
+With `--fly`, the fast axis moves continuously along each row and the
+trigger fires once, at the start of each row's move. This is meant for a
+detector that free‑runs at a fixed frame rate from that trigger. The slow
+axis steps between rows, and rows alternate direction.
+
+```sh
+# 50 um pitch at 100 Hz frames -> 5 mm/s target speed
+scu --backend wire --port /dev/smaract-scu raster \
+    --fast A -12500 12500 50 --slow B -12500 12500 50 --fly --frame-rate 100 \
+    --run-up 200 --trigger serial:/dev/ttyUSB1:dtr --log run043.csv --trajectory run043-traj.csv
+```
+
+**Speed.** The SCU has no velocity setting. In a long closed‑loop move the
+speed is set by the closed‑loop maximum step frequency (50–18,500 Hz) times
+the positioner's step length, which depends on the slide, load and
+amplitude. So the speed is calibrated: the target is `--fly-speed` µm/s, or
+the fast STEP × `--frame-rate`. Test moves over the first row measure the
+speed, then the frequency is scaled until it's within 5%. `--fly-freq HZ`
+skips calibration and uses that frequency. The fast axis's original
+frequency is restored afterwards. To see how your slides behave:
+
+```sh
+scu --backend wire --port /dev/smaract-scu speed A --freq 1000 2000 5000 10000 18500 --distance 2000
+```
+
+This prints the measured speed, the step length per Hz and the
+non‑uniformity at each frequency.
+
+**What gets recorded.** During each row the fast axis is sampled about
+every millisecond on the `wire` backend with a 1 ms latency timer. Each
+sample is stamped at the midpoint of its exchange.
+- The row's speed is fitted over the grid region, and the progress lines
+  report it with its rms deviation from constant speed.
+- `--log` gives, for every grid point, the time it was crossed and the time
+  since that row's trigger (`dt_cross`).
+- `--trajectory` keeps every sample. Use `--sample-ms` to thin it, since a
+  full 25 mm square at full rate means millions of rows.
+
+With a detector started by the trigger, frame *k* of a row is at
+*k*/rate after the trigger. The log turns that into a position, so a speed
+that's slightly off becomes a known position error, not an unknown one.
+
+**Run‑up.** `--run-up` adds travel before and after each row, so the stage
+is at constant speed over the grid. Check the run‑up still fits within
+the travel. The first grid point is reached about run‑up/speed after the
+trigger (also logged), so the detector should take frames for that long
+plus the row.
+
+Limits: speed and smoothness are whatever the slides deliver at that
+frequency; the trajectory log shows how uniform they are. Timing is
+software timing. The trigger is about 1 ms from the move command, and
+samples are within about 1 ms.
+
 ## PVs
 
 The prefix is used verbatim. Device-level PVs are `$(PREFIX)NAME`;
